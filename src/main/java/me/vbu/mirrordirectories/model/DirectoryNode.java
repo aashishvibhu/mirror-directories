@@ -1,5 +1,7 @@
 package me.vbu.mirrordirectories.model;
 
+import lombok.Getter;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -7,7 +9,9 @@ import java.util.Map;
  * Represents a directory in the file system.
  * Can contain child nodes (files or other directories).
  */
+@Getter
 public class DirectoryNode extends Node {
+
     private final Map<String, Node> children;
 
     /**
@@ -28,15 +32,6 @@ public class DirectoryNode extends Node {
     @Override
     public boolean isDirectory() {
         return true;
-    }
-
-    /**
-     * Gets the child nodes of this directory.
-     *
-     * @return A map of child nodes
-     */
-    public Map<String, Node> getChildren() {
-        return children;
     }
 
     /**
