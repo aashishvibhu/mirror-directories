@@ -1,29 +1,17 @@
 package me.vbu.mirrordirectories.model;
 
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+
 /**
  * Abstract base class representing an item in the file system hierarchy.
  * This can be extended to represent specific types like files or directories.
  */
+
+@Getter @AllArgsConstructor
 public abstract class Node {
+
     private final String name;
-
-    /**
-     * Creates a new Node with the given name.
-     *
-     * @param name The name of the node
-     */
-    public Node(String name) {
-        this.name = name;
-    }
-
-    /**
-     * Gets the name of the node.
-     *
-     * @return The name of the node
-     */
-    public String getName() {
-        return name;
-    }
 
     /**
      * Checks if this node represents a directory.
