@@ -1,16 +1,15 @@
 package me.vbu.mirrordirectories.service;
 
-import me.vbu.mirrordirectories.model.DirectoryNode;
-import me.vbu.mirrordirectories.model.FileNode;
-import me.vbu.mirrordirectories.model.Node;
+import lombok.Getter;
+import lombok.Setter;
+import me.vbu.mirrordirectories.model.SourceDestinationDirectoryPair;
+import me.vbu.mirrordirectories.model.filesystem.DirectoryNode;
+import me.vbu.mirrordirectories.model.filesystem.FileNode;
+import me.vbu.mirrordirectories.model.filesystem.Node;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Service for comparing directories using a hierarchical approach.
@@ -18,13 +17,13 @@ import java.util.List;
  */
 public class DirectoryComparator {
 
-
-    // Instance variables for source and destination directories
-    private File sourceDir;
-    private File destDir;
-
-    // Root node containing the comparison result
     private DirectoryNode comparisonResult;
+
+    @Setter @Getter
+    private SourceDestinationDirectoryPair directoryPair;
+
+    @Setter
+    private FileOperation fileOperation;
 
     /**
      * Singleton instance
@@ -35,7 +34,8 @@ public class DirectoryComparator {
      * Private constructor to enforce singleton pattern.
      */
     private DirectoryComparator() {
-        // Private constructor
+        // Default to copy operation
+        this.fileOperation = new CopyFileOperation();
     }
 
     /**
@@ -54,13 +54,20 @@ public class DirectoryComparator {
      * Recursively compares directories and returns a hierarchy of paths that exist in
      * source but not in destination.
      *
-     * @param sourceDir Source directory
-     * @param destDir Destination directory
      * @return Root node of the missing items hierarchy
      */
-    public DirectoryNode compareDirectories(File sourceDir, File destDir) {
-        this.sourceDir = sourceDir;
-        this.destDir = destDir;
+    public DirectoryNode compareDirectories() {
+        if (directoryPair == null) {
+            throw new IllegalStateException("No Directory Pair has been set. Call setDirectoryPair() first.");
+        }
+
+        File sourceDir = directoryPair.getSourceDirectory();
+        File destDir = directoryPair.getDestinationDirectory();
+
+        if (!directoryPair.validateDirectories()) {
+            throw new IllegalArgumentException("Invalid source or destination directory");
+        }
+
         String dirName = sourceDir.getName();
         comparisonResult = new DirectoryNode(dirName);
         compareDirectoriesInternal(sourceDir, destDir, comparisonResult);
@@ -129,52 +136,71 @@ public class DirectoryComparator {
         }
     }
 
+    /**
+     * Processes all differences using the current file operation strategy
+     *
+     * @return Number of successfully processed items
+     * @throws IOException If an I/O error occurs during file operations
+     */
+    public int processMissingItems() throws IOException {
+        if (comparisonResult == null) {
+            throw new IllegalStateException("No comparison has been performed yet. Call compareDirectories() first.");
+        }
+
+        if (directoryPair == null) {
+            throw new IllegalStateException("No input provider has been set. Call setDirectoryPair() first.");
+        }
+
+        if (fileOperation == null) {
+            throw new IllegalStateException("No file operation has been set. Call setFileOperation() first.");
+        }
+
+        return processMissingItems(comparisonResult);
+    }
 
     /**
-     * Copies all differences from source to destination using the FileNode structure.
+     * Processes all differences from a specific node using the current file operation
+     *
+     * @param rootNode The root node of the differences hierarchy
+     * @return Number of successfully processed items
+     * @throws IOException If an I/O error occurs during file operations
+     */
+    public int processMissingItems(Node rootNode) throws IOException {
+        if (rootNode == null) {
+            return 0;
+        }
+
+        return processNodeContents(rootNode, directoryPair.getSourceDirectory(),
+                                   directoryPair.getDestinationDirectory(), "");
+    }
+
+    /**
+     * For backward compatibility - copies all differences
      *
      * @return Number of successfully copied items
      * @throws IOException If an I/O error occurs during file operations
      */
     public int copyMissingItems() throws IOException {
-        if (comparisonResult == null) {
-            throw new IllegalStateException("No comparison has been performed yet. Call compareDirectories() first.");
-        }
-
-        return copyMissingItems(comparisonResult);
+        // Set to copy operation if not already
+        FileOperation previousOperation = this.fileOperation;
+        this.fileOperation = new CopyFileOperation();
+        int result = processMissingItems();
+        this.fileOperation = previousOperation;
+        return result;
     }
 
     /**
-     * Copies all differences from source to destination using a specific Node structure.
+     * Recursively processes a node and its children using the selected file operation.
      *
-     * @param rootNode The root node of the differences hierarchy
-     * @return Number of successfully copied items
-     * @throws IOException If an I/O error occurs during file operations
-     */
-    public int copyMissingItems(Node rootNode) throws IOException {
-        if (rootNode == null) {
-            return 0;
-        }
-
-        return copyNodeContents(rootNode, sourceDir, destDir, "");
-    }
-
-    /**
-     * Recursively copies a node and its children from source to destination.
-     *
-     * @param node The node to copy
+     * @param node The node to process
      * @param sourceRoot Source root directory
      * @param destRoot Destination root directory
      * @param relativePath Current relative path
-     * @return Number of successfully copied items
+     * @return Number of successfully processed items
      * @throws IOException If an I/O error occurs during file operations
      */
-    private int copyNodeContents(Node node, File sourceRoot, File destRoot, String relativePath) throws IOException {
-        int copiedCount = 0;
-
-//        // Build the current relative path
-//        String currentPath = relativePath.isEmpty() ?
-//                node.getName() : relativePath + File.separator + node.getName();
+    private int processNodeContents(Node node, File sourceRoot, File destRoot, String relativePath) throws IOException {
+        int processedCount = 0;
 
         // Get the source and destination files
         File sourceFile = new File(sourceRoot, relativePath);
@@ -188,31 +214,36 @@ public class DirectoryComparator {
         if (node.isDirectory()) {
             // Create the directory
             if (destFile.exists() || destFile.mkdir()) {
-                System.out.println("Directory created or already exists: " + relativePath);
-                copiedCount++;
+                System.out.println(fileOperation.getOperationName() + " directory created or already exists: " + relativePath);
+                processedCount++;
 
-                // Copy all children
+                // Process all children
                 DirectoryNode dirNode = (DirectoryNode) node;
                 for (Node child : dirNode.getChildren().values()) {
-                    copiedCount += copyNodeContents(child, sourceRoot, destRoot, relativePath + File.separator + child.getName());
+                    processedCount += processNodeContents(child, sourceRoot, destRoot,
+                                                        relativePath + File.separator + child.getName());
                 }
             } else {
                 System.err.println("Failed to create directory: " + relativePath);
             }
         } else {
-            // Copy the file
+            // Process the file using the selected operation
             try {
                 Path sourcePath = sourceFile.toPath();
                 Path destPath = destFile.toPath();
-                Files.copy(sourcePath, destPath, StandardCopyOption.REPLACE_EXISTING);
-                System.out.println("Copied file: " + relativePath);
-                copiedCount++;
+
+                if (fileOperation.executeFileOperation(sourcePath, destPath)) {
+                    System.out.println(fileOperation.getOperationName() + " file: " + relativePath);
+                    processedCount++;
+                }
             } catch (IOException e) {
-                System.err.println("Failed to copy file: " + relativePath + " (" + e.getMessage() + ")");
+                System.err.println("Failed to " + fileOperation.getOperationName().toLowerCase() +
+                                   " file: " + relativePath + " (" + e.getMessage() + ")");
+                throw e;
             }
         }
 
-        return copiedCount;
+        return processedCount;
     }
 
     /**
