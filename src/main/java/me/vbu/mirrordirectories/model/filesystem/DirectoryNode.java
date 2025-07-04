@@ -1,4 +1,4 @@
-package me.vbu.mirrordirectories.model;
+package me.vbu.mirrordirectories.model.filesystem;
 
 import lombok.Getter;
 
