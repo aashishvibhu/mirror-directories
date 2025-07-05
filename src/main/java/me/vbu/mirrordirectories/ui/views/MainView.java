@@ -7,13 +7,13 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.Pane;
 import me.vbu.mirrordirectories.model.SourceDestinationDirectoryPair;
 import me.vbu.mirrordirectories.model.filesystem.DirectoryNode;
-import me.vbu.mirrordirectories.model.filesystem.Node;
 import me.vbu.mirrordirectories.service.DirectoryComparator;
 import me.vbu.mirrordirectories.ui.views.components.ControlPanel;
 import me.vbu.mirrordirectories.ui.views.components.DirectorySelectionPanel;
 import me.vbu.mirrordirectories.ui.views.components.DirectoryTreeView;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Main view for the Directory Mirror application.
@@ -77,7 +77,6 @@ public class MainView {
         // Connect UI input to the comparator
 
         comparator.setDirectoryPair(new SourceDestinationDirectoryPair(directorySelectionPanel));
-//        comparator.setInputProvider(new UIDirectoryInputProvider(directorySelectionPanel));
 
         // Validate directories through the input provider
         if (!comparator.getDirectoryPair().validateDirectories()) {
@@ -103,8 +102,7 @@ public class MainView {
                 if (!hasDifferences) {
                     controlPanel.setStatusMessage("No differences found. Directories are in sync.");
                 } else {
-                    int itemCount = countItems(comparisonResult) - 1; // -1 to exclude root
-                    controlPanel.setStatusMessage(itemCount + " items missing from destination directory.");
+                    controlPanel.setStatusMessage(comparator.getTotalFileCount() + " files missing from destination directory.");
                 }
             });
         }).start();
@@ -122,16 +120,29 @@ public class MainView {
         // Update status
         controlPanel.setStatusMessage("Copying files...");
         controlPanel.setCopyButtonEnabled(false);
+        AtomicBoolean isFileOperationCompleted = new AtomicBoolean(false);
 
         // Run copy operation in background thread
         new Thread(() -> {
             try {
-                int copyCount = comparator.copyMissingItems();
+                Thread updateStatusThread = getStatusUpdationThread(isFileOperationCompleted);
+
+                try {
+                    comparator.copyMissingItems();
+                } finally {
+                    isFileOperationCompleted.set(true);
+                    try {
+                        updateStatusThread.join(); // Wait for status thread to finish
+                    } catch (InterruptedException e) {
+                        System.err.println("InterruptedException occurred :: " + e.getMessage());
+                    }
+                }
 
                 // Update UI on JavaFX thread
                 Platform.runLater(() -> {
-                    controlPanel.setStatusMessage("Successfully copied " + copyCount + " items.");
-                    showAlert("Copy Complete", "Successfully copied " + copyCount + " items.");
+                    isFileOperationCompleted.set(true);
+                    controlPanel.setStatusMessage("Successfully copied " + comparator.getProcessedFileCount() + " items.");
+                    showAlert("Copy Complete", "Successfully copied " + comparator.getProcessedFileCount() + " items.");
 
                     // Refresh comparison
                     compareDirectories();
@@ -147,6 +158,31 @@ public class MainView {
         }).start();
     }
 
+    private Thread getStatusUpdationThread(AtomicBoolean isFileOperationCompleted) {
+        Thread updateStatusThread = new Thread(() -> {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                System.err.println("Interruption Exception occurred " + e.getMessage());
+            }
+            while(!isFileOperationCompleted.get()) {
+                Platform.runLater(() -> controlPanel.setStatusMessage(
+                        "(" + comparator.getProcessedFileCount() + "/" + comparator.getTotalFileCount() + ") " +
+                                "Coping file " + comparator.getCurrentlyCopyingFileName()
+                ));
+
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    System.err.println("Interruption Exception occurred " + e.getMessage());
+                }
+            }
+        });
+
+        updateStatusThread.start();
+        return updateStatusThread;
+    }
+
     /**
      * Shows an alert dialog with the specified title and message.
      *
@@ -159,27 +195,6 @@ public class MainView {
         alert.setHeaderText(null);
         alert.setContentText(message);
         alert.showAndWait();
-    }
-
-    /**
-     * Counts the total number of nodes in the hierarchy.
-     *
-     * @param node The root node to count
-     * @return Number of nodes in the hierarchy
-     */
-    private int countItems(Node node) {
-        int count = 1; // Count this node
-
-        if (node.isDirectory()) {
-            DirectoryNode dirNode = (DirectoryNode) node;
-            if (dirNode.getChildren() != null) {
-                for (Node child : dirNode.getChildren().values()) {
-                    count += countItems(child);
-                }
-            }
-        }
-
-        return count;
     }
 
     /**
