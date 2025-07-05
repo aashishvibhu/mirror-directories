@@ -25,6 +25,15 @@ public class DirectoryComparator {
     @Setter
     private FileOperation fileOperation;
 
+    @Getter
+    private long processedFileCount = -1;
+
+    @Getter
+    private long totalFileCount = 0;
+
+    @Getter
+    private String currentlyCopyingFileName = "";
+
     /**
      * Singleton instance
      */
@@ -97,6 +106,7 @@ public class DirectoryComparator {
                         addAllContents(sourceItem, (DirectoryNode) newNode);
                     } else {
                         newNode = new FileNode(sourceItem.getName());
+                        totalFileCount++;
                     }
                     parentNode.addChild(newNode);
                 } else if (sourceItem.isDirectory() && destItem.isDirectory()) {
@@ -130,6 +140,7 @@ public class DirectoryComparator {
                     addAllContents(item, (DirectoryNode) node);
                 } else {
                     node = new FileNode(item.getName());
+                    totalFileCount++;
                 }
                 parentNode.addChild(node);
             }
@@ -139,10 +150,9 @@ public class DirectoryComparator {
     /**
      * Processes all differences using the current file operation strategy
      *
-     * @return Number of successfully processed items
      * @throws IOException If an I/O error occurs during file operations
      */
-    public int processMissingItems() throws IOException {
+    public void processMissingItems() throws IOException {
         if (comparisonResult == null) {
             throw new IllegalStateException("No comparison has been performed yet. Call compareDirectories() first.");
         }
@@ -155,38 +165,34 @@ public class DirectoryComparator {
             throw new IllegalStateException("No file operation has been set. Call setFileOperation() first.");
         }
 
-        return processMissingItems(comparisonResult);
+        processMissingItems(comparisonResult);
     }
 
     /**
      * Processes all differences from a specific node using the current file operation
      *
      * @param rootNode The root node of the differences hierarchy
-     * @return Number of successfully processed items
      * @throws IOException If an I/O error occurs during file operations
      */
-    public int processMissingItems(Node rootNode) throws IOException {
+    public void processMissingItems(Node rootNode) throws IOException {
         if (rootNode == null) {
-            return 0;
+            return;
         }
-
-        return processNodeContents(rootNode, directoryPair.getSourceDirectory(),
+        processNodeContents(rootNode, directoryPair.getSourceDirectory(),
                                    directoryPair.getDestinationDirectory(), "");
     }
 
     /**
      * For backward compatibility - copies all differences
      *
-     * @return Number of successfully copied items
      * @throws IOException If an I/O error occurs during file operations
      */
-    public int copyMissingItems() throws IOException {
+    public void copyMissingItems() throws IOException {
         // Set to copy operation if not already
         FileOperation previousOperation = this.fileOperation;
         this.fileOperation = new CopyFileOperation();
-        int result = processMissingItems();
+        processMissingItems();
         this.fileOperation = previousOperation;
-        return result;
     }
 
     /**
@@ -196,31 +202,27 @@ public class DirectoryComparator {
      * @param sourceRoot Source root directory
      * @param destRoot Destination root directory
      * @param relativePath Current relative path
-     * @return Number of successfully processed items
      * @throws IOException If an I/O error occurs during file operations
      */
-    private int processNodeContents(Node node, File sourceRoot, File destRoot, String relativePath) throws IOException {
-        int processedCount = 0;
-
+    private void processNodeContents(Node node, File sourceRoot, File destRoot, String relativePath) throws IOException {
         // Get the source and destination files
         File sourceFile = new File(sourceRoot, relativePath);
         File destFile = new File(destRoot, relativePath);
 
         // Create parent directories if needed
         if (!ensureParentDirectoryExists(destFile)) {
-            return 0;
+            return;
         }
 
         if (node.isDirectory()) {
             // Create the directory
             if (destFile.exists() || destFile.mkdir()) {
                 System.out.println(fileOperation.getOperationName() + " directory created or already exists: " + relativePath);
-                processedCount++;
 
                 // Process all children
                 DirectoryNode dirNode = (DirectoryNode) node;
                 for (Node child : dirNode.getChildren().values()) {
-                    processedCount += processNodeContents(child, sourceRoot, destRoot,
+                    processNodeContents(child, sourceRoot, destRoot,
                                                         relativePath + File.separator + child.getName());
                 }
             } else {
@@ -234,7 +236,8 @@ public class DirectoryComparator {
 
                 if (fileOperation.executeFileOperation(sourcePath, destPath)) {
                     System.out.println(fileOperation.getOperationName() + " file: " + relativePath);
-                    processedCount++;
+                    currentlyCopyingFileName = relativePath;
+                    processedFileCount++;
                 }
             } catch (IOException e) {
                 System.err.println("Failed to " + fileOperation.getOperationName().toLowerCase() +
@@ -242,8 +245,6 @@ public class DirectoryComparator {
                 throw e;
             }
         }
-
-        return processedCount;
     }
 
     /**
