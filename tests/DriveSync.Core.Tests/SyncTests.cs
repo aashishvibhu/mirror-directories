@@ -187,7 +187,7 @@ public class SyncTests
         using var env = new TestEnv();
         using var first = env.Open();
 
-        var error = Assert.Throws<DriveSyncException>(() => env.Open());
+        var error = Assert.Throws<DriveBusyException>(() => env.Open());
         Assert.Contains("already using", error.Message);
     }
 

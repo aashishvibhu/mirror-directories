@@ -183,6 +183,7 @@ public sealed class HealthReport
 public sealed record BackupSummary(
     IReadOnlyList<Storage.StateTotal> Totals,
     DateTime? LastSyncUtc,
+    int? LastSyncProblems,
     long? DriveFreeBytes,
     long? DriveTotalBytes,
     string BackupRoot)

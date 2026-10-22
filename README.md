@@ -20,8 +20,8 @@ v2 is being built in milestones on the `vbu/v2` branch.
 | Milestone | Contents | Status |
 |---|---|---|
 | 1 | Backup engine and tests | Done |
-| 2 | App basics: setup wizard, dashboard, sync with preview, missing-files decisions | Next |
-| 3 | Backup browser, restore, version history, free up space, trash | |
+| 2 | App basics: setup wizard, dashboard, sync with preview, missing-files decisions | Done |
+| 3 | Backup browser, restore, version history, free up space, trash | Next |
 | 4 | Tray agent, notifications, schedule, sync on plug-in, Explorer menu | |
 | 5 | Health check screen, settings, installer | |
 
@@ -56,10 +56,45 @@ Before sending anything to a Recycle Bin, DriveSync checks that the bin has room
 its oldest items to make space, so DriveSync stops and tells you instead. Drives without a Recycle Bin
 (USB sticks, network folders) get a `.drivesync\trash` folder that DriveSync never empties.
 
+## The app
+
+A Windows 11-style desktop app (WPF with [WPF-UI](https://github.com/lepoco/wpfui)), in light or dark to match Windows.
+
+- **Setup wizard**: pick the folders (nothing is pre-selected), the backup drive, and what to do with files
+  that disappear from the PC, then start the first backup.
+- **Home**: backup status, **Sync now**, live progress with pause and cancel, totals, and recent activity.
+- **Review changes**: every sync shows what's new, changed, moved, back on the PC and missing before anything is copied.
+- **Missing files**: files that left the PC without going through DriveSync, grouped by folder, with a
+  Recycle Bin hint. For each group or file: **Deleted on purpose**, **Keep on backup**, or **Decide later**.
+  Removing anything from the backup asks for confirmation first.
+
+Settings live in `%APPDATA%\DriveSync`, along with a copy of the catalog so totals show while the drive is unplugged.
+
+### Trying it safely
+
+Two environment variables move everything the app writes into folders you choose, and swap the real
+Recycle Bin for an ordinary folder:
+
+| Variable | Effect |
+|---|---|
+| `DRIVESYNC_DATA_DIR` | Where settings and the catalog copy are kept, instead of `%APPDATA%\DriveSync` |
+| `DRIVESYNC_RECYCLE_BIN_DIR` | A folder that stands in for the Recycle Bin |
+
+With both set, two developer commands are available (they refuse to run otherwise):
+
+```
+DriveSync.exe --dev-demo <folder>         builds sample PC folders, a backup and some history in <folder>
+DriveSync.exe --dev-screenshots <folder>  renders every screen, light and dark, to PNG files in <folder>
+```
+
 ## Layout
 
 ```
 DriveSync.slnx
+src/DriveSync.App/           the desktop app
+  Views/                     windows and screens (XAML)
+  ViewModels/                screen logic
+  Services/                  shared app services and formatting
 src/DriveSync.Core/          backup engine (no UI)
   Engine/                    sync, offload, delete, restore, health check
   Scanning/                  reading the PC's folders, exclusions
@@ -78,5 +113,5 @@ dotnet build
 dotnet test
 ```
 
-The tests use a stand-in Recycle Bin in a temp folder, so they never touch yours.
-One test sends a small file to the real Recycle Bin; it runs only when `DRIVESYNC_REAL_RECYCLE_TEST=1` is set.
+The tests write only to a `testdata` folder next to the test binaries, and use a folder that stands in for
+the Recycle Bin, so they never touch your files or your real Recycle Bin.

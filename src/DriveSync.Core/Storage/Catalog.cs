@@ -40,22 +40,27 @@ public sealed class Catalog : IDisposable
 
     public string FilePath { get; }
 
-    Catalog(string path)
+    Catalog(string path, bool readOnly = false)
     {
         FilePath = path;
         _db = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,
-            Mode = SqliteOpenMode.ReadWriteCreate,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
             Pooling = false, // release the file as soon as we're done, so the drive can be ejected
         }.ToString());
         _db.Open();
+        if (readOnly)
+            return;
         // A rollback journal (not WAL) is safest on a USB drive that may be unplugged.
         Execute("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;");
         Execute(Schema);
     }
 
     public static Catalog Open(string path) => new(path);
+
+    /// <summary>Opens an existing catalog without changing it, e.g. the copy kept on the PC.</summary>
+    public static Catalog OpenReadOnly(string path) => new(path, readOnly: true);
 
     /// <summary>Groups writes into one transaction until disposed. Nested calls join the open one.</summary>
     public IDisposable Batch()

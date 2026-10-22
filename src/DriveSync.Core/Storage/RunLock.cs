@@ -15,7 +15,7 @@ public sealed class RunLock : IDisposable
         }
         catch (IOException e)
         {
-            throw new DriveSyncException("Another DriveSync task is already using this backup drive. Wait for it to finish, then try again.", e);
+            throw new DriveBusyException("Another DriveSync task is already using this backup drive. Wait for it to finish, then try again.", e);
         }
     }
 

@@ -23,6 +23,70 @@ public class MissingFileTests
     }
 
     [Fact]
+    public async Task Pending_files_are_listed_with_a_recycle_bin_hint()
+    {
+        using var env = new TestEnv();
+        env.Write(@"Desktop\binned.txt", "binned");
+        env.Write(@"Desktop\vanished.txt", "vanished");
+        await env.SyncAsync();
+        env.Bin.Recycle([env.PcPath(@"Desktop\binned.txt")]);
+        File.Delete(env.PcPath(@"Desktop\vanished.txt"));
+        await env.SyncAsync();
+
+        using var session = env.Open();
+        var pending = session.GetPendingFiles().ToDictionary(m => m.Record.Key, m => m.InRecycleBin);
+
+        Assert.Equal(2, pending.Count);
+        Assert.True(pending[@"Desktop\binned.txt"]);
+        Assert.False(pending[@"Desktop\vanished.txt"]);
+    }
+
+    [Fact]
+    public async Task Paused_sync_waits_and_finishes_after_resume()
+    {
+        using var env = new TestEnv();
+        for (int i = 0; i < 5; i++)
+            env.Write($@"Desktop\f{i}.txt", $"file {i}");
+        var control = new Engine.SyncControl();
+        control.Pause();
+
+        using var session = env.Open();
+        var plan = await session.PlanSyncAsync();
+        var running = Task.Run(() => session.ApplyAsync(plan, control: control));
+        await Task.Delay(200);
+        Assert.False(running.IsCompleted);
+        Assert.False(File.Exists(env.BackupPath(@"Desktop\f0.txt")));
+
+        control.Resume();
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(5, result.Copied);
+    }
+
+    [Fact]
+    public async Task Cancelled_sync_keeps_what_it_copied()
+    {
+        using var env = new TestEnv();
+        for (int i = 0; i < 5; i++)
+            env.Write($@"Desktop\f{i}.txt", $"file {i}");
+        using var cancel = new CancellationTokenSource();
+        var control = new Engine.SyncControl();
+        control.Pause();
+
+        using (var session = env.Open())
+        {
+            var plan = await session.PlanSyncAsync();
+            var running = Task.Run(() => session.ApplyAsync(plan, ct: cancel.Token, control: control));
+            await Task.Delay(100);
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        }
+
+        var next = await env.SyncAsync();
+        Assert.Equal(5, next.Copied);
+        Assert.Empty(Directory.GetFiles(env.BackupRoot, "*.dstmp", SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task Deleted_on_purpose_sends_the_backup_copy_to_the_recycle_bin()
     {
         using var env = new TestEnv();

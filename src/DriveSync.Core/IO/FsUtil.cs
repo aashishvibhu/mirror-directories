@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace DriveSync.Core.IO;
 
 internal static class FsUtil
@@ -82,12 +80,5 @@ internal static class FsUtil
         }
     }
 
-    public static string FormatSize(long bytes) => bytes switch
-    {
-        >= 1L << 40 => (bytes / (double)(1L << 40)).ToString("0.00 'TB'", CultureInfo.CurrentCulture),
-        >= 1L << 30 => (bytes / (double)(1L << 30)).ToString("0.0 'GB'", CultureInfo.CurrentCulture),
-        >= 1L << 20 => (bytes / (double)(1L << 20)).ToString("0.0 'MB'", CultureInfo.CurrentCulture),
-        >= 1L << 10 => (bytes / (double)(1L << 10)).ToString("0 'KB'", CultureInfo.CurrentCulture),
-        _ => $"{bytes} bytes",
-    };
+    public static string FormatSize(long bytes) => Formatting.Size(bytes);
 }

@@ -111,24 +111,34 @@ public sealed partial class DriveSyncSession : IDisposable
         return relative.Length == 0 ? source.Path : Path.Combine(source.Path, relative);
     }
 
-    public BackupSummary GetSummary()
+    public BackupSummary GetSummary() => ReadSummary(Catalog, Location.Root);
+
+    /// <summary>
+    /// Reads a summary from any catalog. The app uses this on the PC's copy of the catalog
+    /// to show counts while the backup drive is unplugged.
+    /// </summary>
+    public static BackupSummary ReadSummary(Catalog catalog, string backupRoot)
     {
-        DateTime? lastSync = DateTime.TryParse(Catalog.GetMeta("last_sync_utc"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : null;
+        DateTime? lastSync = DateTime.TryParse(catalog.GetMeta("last_sync_utc"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : null;
+        int? lastProblems = int.TryParse(catalog.GetMeta("last_sync_problems"), CultureInfo.InvariantCulture, out int p) ? p : null;
         long? free = null, total = null;
-        string? root = Path.GetPathRoot(Location.Root);
+        string? root = Path.GetPathRoot(backupRoot);
         if (!string.IsNullOrEmpty(root) && !root.StartsWith(@"\\", StringComparison.Ordinal))
         {
             try
             {
                 var drive = new DriveInfo(root);
-                free = drive.AvailableFreeSpace;
-                total = drive.TotalSize;
+                if (drive.IsReady)
+                {
+                    free = drive.AvailableFreeSpace;
+                    total = drive.TotalSize;
+                }
             }
             catch (IOException)
             {
             }
         }
-        return new BackupSummary(Catalog.Totals(), lastSync, free, total, Location.Root);
+        return new BackupSummary(catalog.Totals(), lastSync, lastProblems, free, total, backupRoot);
     }
 
     static bool TryRelative(string full, string folder, out string relative)

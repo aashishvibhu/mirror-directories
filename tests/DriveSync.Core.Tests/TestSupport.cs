@@ -6,92 +6,48 @@ using Microsoft.Data.Sqlite;
 namespace DriveSync.Core.Tests;
 
 /// <summary>
-/// A Recycle Bin that stores items in a test folder, so tests never touch the real one.
-/// Follows the same rules as the real bin: it refuses items it has no room for instead of discarding older ones.
+/// Where tests put their files: a folder next to the test binaries, inside the repo.
+/// Tests never write anywhere else, and never to the real Recycle Bin.
 /// </summary>
-public sealed class FakeRecycleBin(string folder) : IRecycleBin
+public static class TestPaths
 {
-    int _next;
+    public static string Root { get; } = Path.Combine(AppContext.BaseDirectory, "testdata");
 
-    public bool Supported { get; set; } = true;
-
-    public long MaxBytes { get; set; } = long.MaxValue;
-
-    public List<RecycledItem> Items { get; } = [];
-
-    public bool IsSupported(string path) => Supported;
-
-    public IReadOnlyDictionary<string, RecycleOutcome> Recycle(IReadOnlyList<string> paths)
+    public static string NewFolder(string prefix)
     {
-        var outcomes = new Dictionary<string, RecycleOutcome>(StringComparer.OrdinalIgnoreCase);
-        if (!Supported)
-        {
-            foreach (string p in paths)
-                outcomes[p] = RecycleOutcome.NotSupported;
-            return outcomes;
-        }
-
-        long used = Items.Where(i => File.Exists(i.DataPath) || Directory.Exists(i.DataPath)).Sum(i => i.Size);
-        var accepted = new List<string>();
-        foreach (string p in paths)
-        {
-            if (SizeOf(p) > MaxBytes)
-                outcomes[p] = RecycleOutcome.TooLarge;
-            else
-                accepted.Add(p);
-        }
-        if (used + accepted.Sum(SizeOf) > MaxBytes)
-        {
-            foreach (string p in accepted)
-                outcomes[p] = RecycleOutcome.BinFull;
-            return outcomes;
-        }
-
-        Directory.CreateDirectory(folder);
-        foreach (string p in accepted)
-        {
-            long size = SizeOf(p);
-            string data = Path.Combine(folder, $"$R{++_next:D4}{Path.GetExtension(p)}");
-            if (File.Exists(p))
-                File.Move(p, data);
-            else if (Directory.Exists(p))
-                Directory.Move(p, data);
-            else
-            {
-                outcomes[p] = RecycleOutcome.Failed;
-                continue;
-            }
-            Items.Add(new RecycledItem(Path.GetFullPath(p), DateTime.UtcNow, size, "", data));
-            outcomes[p] = RecycleOutcome.Recycled;
-        }
-        return outcomes;
+        string path = Path.Combine(Root, prefix + Guid.NewGuid().ToString("N")[..10]);
+        Directory.CreateDirectory(path);
+        return path;
     }
 
-    public IReadOnlyList<RecycledItem> List(string driveRoot) =>
-        [.. Items.Where(i => i.OriginalPath.StartsWith(driveRoot, StringComparison.OrdinalIgnoreCase))];
-
-    public bool Holds(string originalPath) =>
-        Items.Any(i => i.OriginalPath.Equals(Path.GetFullPath(originalPath), StringComparison.OrdinalIgnoreCase));
-
-    static long SizeOf(string path) =>
-        File.Exists(path) ? new FileInfo(path).Length
-        : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length)
-        : 0;
+    public static void Remove(string path)
+    {
+        SqliteConnection.ClearAllPools();
+        if (!Path.GetFullPath(path).StartsWith(Root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Refusing to remove {path}: it's outside the test folder.");
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
 }
 
-/// <summary>A throwaway PC (Desktop and Documents folders), backup drive and Recycle Bin in a temp folder.</summary>
+/// <summary>A throwaway PC (Desktop and Documents folders), backup drive and Recycle Bin inside the test folder.</summary>
 public sealed class TestEnv : IDisposable
 {
     static readonly DateTime BaseTime = new(2026, 1, 1, 9, 0, 0, DateTimeKind.Utc);
     int _clock;
 
-    public string Dir { get; } = Path.Combine(Path.GetTempPath(), "DriveSyncTests", Guid.NewGuid().ToString("N")[..10]);
+    public string Dir { get; } = TestPaths.NewFolder("env-");
 
     public string Pc => Path.Combine(Dir, "pc");
 
     public string Drive => Path.Combine(Dir, "drive");
 
-    public FakeRecycleBin Bin { get; }
+    public FolderRecycleBin Bin { get; }
 
     public BackupProfile Profile { get; }
 
@@ -100,7 +56,7 @@ public sealed class TestEnv : IDisposable
         Directory.CreateDirectory(Path.Combine(Pc, "Desktop"));
         Directory.CreateDirectory(Path.Combine(Pc, "Documents"));
         Directory.CreateDirectory(Drive);
-        Bin = new FakeRecycleBin(Path.Combine(Dir, "recycle-bin"));
+        Bin = new FolderRecycleBin(Path.Combine(Dir, "recycle-bin"));
         Profile = BackupSetup.CreateProfile(Drive, [Path.Combine(Pc, "Desktop"), Path.Combine(Pc, "Documents")]);
     }
 
@@ -135,15 +91,5 @@ public sealed class TestEnv : IDisposable
         return session.Catalog.Get(key);
     }
 
-    public void Dispose()
-    {
-        SqliteConnection.ClearAllPools();
-        try
-        {
-            Directory.Delete(Dir, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-    }
+    public void Dispose() => TestPaths.Remove(Dir);
 }

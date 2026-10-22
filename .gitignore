@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# DriveSync: local build caches, temp files, demo data and test data (never outside the repo)
+.local/

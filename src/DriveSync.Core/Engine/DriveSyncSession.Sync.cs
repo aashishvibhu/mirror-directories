@@ -108,7 +108,7 @@ public sealed partial class DriveSyncSession
     }
 
     /// <summary>Carries out a plan from <see cref="PlanSyncAsync"/>.</summary>
-    public async Task<SyncResult> ApplyAsync(SyncPlan plan, IProgress<SyncProgress>? progress = null, CancellationToken ct = default)
+    public async Task<SyncResult> ApplyAsync(SyncPlan plan, IProgress<SyncProgress>? progress = null, CancellationToken ct = default, SyncControl? control = null)
     {
         var started = DateTime.UtcNow;
         var report = new ProgressThrottle(progress);
@@ -137,6 +137,11 @@ public sealed partial class DriveSyncSession
             long bytesTotal = copies.Sum(f => f.Size), bytesDone = 0;
             for (int i = 0; i < copies.Count; i++)
             {
+                if (control is { IsPaused: true })
+                {
+                    report.Report(new SyncProgress("Paused", i, copies.Count, bytesDone, bytesTotal, null), force: true);
+                    await control.WaitIfPausedAsync(ct);
+                }
                 ct.ThrowIfCancellationRequested();
                 var file = copies[i];
                 int filesDone = i;
@@ -158,14 +163,33 @@ public sealed partial class DriveSyncSession
 
             ApplyMissingPolicy(plan, result, stamp);
             Catalog.SetMeta("last_sync_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-            Catalog.Log("sync", null,
-                $"{result.Copied} new, {result.Updated} updated, {result.Moved} moved, {result.RemovedFromBackup} removed, {result.WaitingForDecision} waiting, {result.Problems.Count} problems");
+            Catalog.SetMeta("last_sync_problems", result.Problems.Count.ToString(CultureInfo.InvariantCulture));
+            Catalog.Log("sync", null, Describe(result));
         }
 
         result.PendingTotal = Catalog.Count(FileState.Pending);
         result.Duration = DateTime.UtcNow - started;
         report.Report(new SyncProgress("Done", 0, 0, 0, 0, null), force: true);
         return result;
+    }
+
+    static string Describe(SyncResult r)
+    {
+        var parts = new List<string>();
+        void Add(int n, string what)
+        {
+            if (n > 0)
+                parts.Add($"{n:N0} {what}");
+        }
+        Add(r.Copied, "new");
+        Add(r.Updated, "updated");
+        Add(r.Moved, "moved");
+        Add(r.BackOnPc, "back on PC");
+        Add(r.KeptOnBackup, "kept on backup");
+        Add(r.RemovedFromBackup, "sent to Recycle Bin");
+        Add(r.WaitingForDecision, "waiting for a decision");
+        Add(r.Problems.Count, "problems");
+        return parts.Count == 0 ? "No changes" : string.Join(", ", parts);
     }
 
     bool TryApplyMove(PlannedMove move, string stamp)
@@ -303,6 +327,17 @@ public sealed partial class DriveSyncSession
                 result.Problems.Add(new Problem(key, problem));
             }
         }
+    }
+
+    /// <summary>Files waiting for a decision, with a hint when the PC's Recycle Bin holds them.</summary>
+    public IReadOnlyList<MissingFile> GetPendingFiles()
+    {
+        var pending = Catalog.Query(FileState.Pending);
+        if (pending.Count == 0)
+            return [];
+        var recycleBin = PcRecycleBin();
+        return [.. pending.Select(r => new MissingFile(r,
+            _sources.ContainsKey(KeyPath.SourceName(r.Key)) && recycleBin.Find(SourcePathFor(r.Key)) is not null))];
     }
 
     /// <summary>Applies the user's answer for files that are missing from the PC.</summary>

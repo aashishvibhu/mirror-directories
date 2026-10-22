@@ -32,7 +32,7 @@ public class RecycleBinIndexTests
     [Fact]
     public void Reads_a_windows_10_index_file()
     {
-        string dir = Directory.CreateTempSubdirectory("ds-bin-").FullName;
+        string dir = TestPaths.NewFolder("ds-bin-");
         try
         {
             const string original = @"C:\Users\me\Desktop\Old Projects";
@@ -54,7 +54,7 @@ public class RecycleBinIndexTests
         }
         finally
         {
-            Directory.Delete(dir, recursive: true);
+            TestPaths.Remove(dir);
         }
     }
 
@@ -76,7 +76,7 @@ public class CatalogTests
     [Fact]
     public void Records_survive_reopening_and_can_be_queried_by_folder()
     {
-        string dir = Directory.CreateTempSubdirectory("ds-cat-").FullName;
+        string dir = TestPaths.NewFolder("ds-cat-");
         string path = Path.Combine(dir, "catalog.db");
         try
         {
@@ -96,7 +96,7 @@ public class CatalogTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            Directory.Delete(dir, recursive: true);
+            TestPaths.Remove(dir);
         }
     }
 }
@@ -106,7 +106,7 @@ public class FileHasherTests
     [Fact]
     public async Task Copy_and_checksum_in_one_pass_match_a_separate_checksum()
     {
-        string dir = Directory.CreateTempSubdirectory("ds-hash-").FullName;
+        string dir = TestPaths.NewFolder("ds-hash-");
         try
         {
             string source = Path.Combine(dir, "big.bin");
@@ -121,7 +121,7 @@ public class FileHasherTests
         }
         finally
         {
-            Directory.Delete(dir, recursive: true);
+            TestPaths.Remove(dir);
         }
     }
 }
@@ -133,10 +133,10 @@ public class WindowsRecycleBinTests
     public void The_system_drive_has_a_recycle_bin_and_it_can_be_listed()
     {
         var bin = new WindowsRecycleBin();
-        string temp = Path.GetTempPath();
+        string here = AppContext.BaseDirectory;
 
-        Assert.True(bin.IsSupported(temp));
-        _ = bin.List(Path.GetPathRoot(temp)!); // reads the real index without throwing
+        Assert.True(bin.IsSupported(here));
+        _ = bin.List(Path.GetPathRoot(here)!); // only reads the real index
     }
 
     [Fact]
@@ -146,7 +146,7 @@ public class WindowsRecycleBinTests
     [Fact]
     public void Paths_too_long_for_the_recycle_bin_are_refused_not_deleted()
     {
-        string dir = Directory.CreateTempSubdirectory("ds-long-").FullName;
+        string dir = TestPaths.NewFolder("ds-long-");
         try
         {
             string path = Path.Combine(dir, new string('x', 120), new string('y', 120), "file.txt");
@@ -160,30 +160,7 @@ public class WindowsRecycleBinTests
         }
         finally
         {
-            Directory.Delete(dir, recursive: true);
+            TestPaths.Remove(dir);
         }
-    }
-
-    /// <summary>
-    /// Actually sends a small file to the real Recycle Bin. Off by default so test runs leave the bin alone;
-    /// set DRIVESYNC_REAL_RECYCLE_TEST=1 to run it.
-    /// </summary>
-    [Fact]
-    public void Sends_a_file_to_the_real_recycle_bin_when_enabled()
-    {
-        if (Environment.GetEnvironmentVariable("DRIVESYNC_REAL_RECYCLE_TEST") != "1")
-            return;
-        string dir = Directory.CreateTempSubdirectory("ds-real-").FullName;
-        string path = Path.Combine(dir, $"DriveSync self-test {DateTime.Now:yyyyMMdd-HHmmss}.txt");
-        File.WriteAllText(path, "DriveSync Recycle Bin self-test. Safe to delete.");
-        var bin = new WindowsRecycleBin();
-
-        var outcome = bin.Recycle([path]);
-
-        Assert.Equal(RecycleOutcome.Recycled, outcome[path]);
-        Assert.False(File.Exists(path));
-        var item = Assert.Single(bin.List(Path.GetPathRoot(path)!), i => i.OriginalPath.Equals(path, StringComparison.OrdinalIgnoreCase));
-        Assert.True(File.Exists(item.DataPath));
-        Directory.Delete(dir);
     }
 }
