@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DriveSync.App/DriveSync.App.csproj" />
+    <Project Path="src/DriveSync.Core/DriveSync.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DriveSync.App.Tests/DriveSync.App.Tests.csproj" />
+    <Project Path="tests/DriveSync.Core.Tests/DriveSync.Core.Tests.csproj" />
+  </Folder>
+</Solution>
