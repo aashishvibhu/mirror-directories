@@ -193,8 +193,13 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
         string? path = PickFolder?.Invoke();
         if (string.IsNullOrEmpty(path))
             return;
-        var choice = DriveChoiceViewModel.FromFolder(this, path);
-        Drives.Add(choice);
+        string folder = Path.TrimEndingDirectorySeparator(path);
+        var choice = Drives.FirstOrDefault(d => d.Root.Equals(folder, StringComparison.OrdinalIgnoreCase));
+        if (choice is null)
+        {
+            choice = DriveChoiceViewModel.FromFolder(this, folder);
+            Drives.Add(choice);
+        }
         choice.IsSelected = true;
     }
 
@@ -247,6 +252,13 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
 
     internal void OnDriveSelected(DriveChoiceViewModel drive)
     {
+        // Radio buttons only clear each other when clicked. A choice selected from code
+        // (a folder just added, or the drive kept after Refresh) must clear the rest here.
+        foreach (var other in Drives)
+        {
+            if (!ReferenceEquals(other, drive))
+                other.IsSelected = false;
+        }
         SelectedDrive = drive;
         UpdateDriveWarning();
     }

@@ -38,6 +38,10 @@ public sealed class AppServices
             : new AppServices(profiles, new FolderRecycleBin(binDir), usesStandInRecycleBin: true);
     }
 
+    /// <summary>For tests: settings in <paramref name="dataDir"/> and a given Recycle Bin.</summary>
+    internal static AppServices Create(string dataDir, IRecycleBin recycleBin) =>
+        new(new ProfileStore(Path.Combine(dataDir, "profile.json")), recycleBin, usesStandInRecycleBin: true);
+
     public BackupProfile? LoadProfile() => Profile = Profiles.Load();
 
     public void SaveProfile(BackupProfile profile)
