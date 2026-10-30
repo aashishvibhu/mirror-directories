@@ -31,6 +31,9 @@ public sealed class SyncPlan(ScanResult scan)
 
     public List<MissingFile> Missing { get; } = [];
 
+    /// <summary>Missing files that were offloaded through another backup. They're kept on this backup too.</summary>
+    public List<FileRecord> OffloadedElsewhere { get; } = [];
+
     public int UnchangedCount { get; set; }
 
     public long BytesToCopy { get; set; }
@@ -41,7 +44,7 @@ public sealed class SyncPlan(ScanResult scan)
     /// </summary>
     public bool MassDisappearance { get; set; }
 
-    public bool HasChanges => NewFiles.Count + ChangedFiles.Count + Moves.Count + BackOnPc.Count + Missing.Count > 0;
+    public bool HasChanges => NewFiles.Count + ChangedFiles.Count + Moves.Count + BackOnPc.Count + Missing.Count + OffloadedElsewhere.Count > 0;
 }
 
 public sealed class SyncResult
@@ -138,6 +141,12 @@ public sealed class RestoreResult
 
     public List<Problem> Problems { get; } = [];
 }
+
+/// <summary>
+/// Outcome of moving a backup to another drive. When <see cref="Switched"/> is false nothing changed:
+/// the backup still uses its old drive, and the partial copy is left at <see cref="NewRoot"/>.
+/// </summary>
+public sealed record MoveResult(bool Switched, string NewRoot, string NewDriveId, int FilesCopied, long BytesCopied, IReadOnlyList<Problem> Problems);
 
 public sealed record VersionEntry(string Stamp, string Key, long Size, DateTime ModifiedUtc, string Path);
 

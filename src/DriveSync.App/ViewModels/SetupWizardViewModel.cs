@@ -25,27 +25,66 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     public SetupWizardViewModel(AppServices services, IEnumerable<FolderSuggestion> suggestions)
     {
         _services = services;
+        IsFirstBackup = services.Backups.Count == 0;
+        Name = IsFirstBackup ? "My backup" : NextFreeName(services.Backups);
         foreach (var suggestion in suggestions)
             AddFolderChoice(suggestion.Name, suggestion.Path, selected: false);
-        Policies.Add(new PolicyChoiceViewModel(MissingFilePolicy.Ask, "Ask me (recommended)",
-            "DriveSync lists missing files and you decide: deleted on purpose, or removed to free space. Until you answer, they stay on the backup."));
-        Policies.Add(new PolicyChoiceViewModel(MissingFilePolicy.RecycleBinMeansDeleted, "Treat files in the Recycle Bin as deleted",
-            "If a missing file is in this PC's Recycle Bin, its backup copy goes to the backup drive's Recycle Bin too. DriveSync asks about the rest."));
-        Policies.Add(new PolicyChoiceViewModel(MissingFilePolicy.AlwaysKeep, "Always keep them on the backup",
-            "Missing files are treated as removed to free space. The backup never loses anything."));
-        Policies.Add(new PolicyChoiceViewModel(MissingFilePolicy.AlwaysRemove, "Always remove them from the backup",
-            "The backup follows your PC. Copies of missing files go to the backup drive's Recycle Bin."));
+        foreach (var choice in PolicyChoices())
+            Policies.Add(choice);
         Policies[0].IsSelected = true;
         RefreshDrives();
     }
 
+    /// <summary>The four rules for files that disappear from the PC, shared with Edit backup.</summary>
+    internal static IEnumerable<PolicyChoiceViewModel> PolicyChoices() =>
+    [
+        new(MissingFilePolicy.Ask, "Ask me (recommended)",
+            "DriveSync lists missing files and you decide: deleted on purpose, or removed to free space. Until you answer, they stay on the backup."),
+        new(MissingFilePolicy.RecycleBinMeansDeleted, "Treat files in the Recycle Bin as deleted",
+            "If a missing file is in this PC's Recycle Bin, its backup copy goes to the backup drive's Recycle Bin too. DriveSync asks about the rest."),
+        new(MissingFilePolicy.AlwaysKeep, "Always keep them on the backup",
+            "Missing files are treated as removed to free space. The backup never loses anything."),
+        new(MissingFilePolicy.AlwaysRemove, "Always remove them from the backup",
+            "The backup follows your PC. Copies of missing files go to the backup drive's Recycle Bin."),
+    ];
+
+    static string NextFreeName(IReadOnlyList<BackupProfile> backups)
+    {
+        for (int i = backups.Count + 1; ; i++)
+        {
+            string name = $"Backup {i}";
+            if (!backups.Any(b => b.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                return name;
+        }
+    }
+
+    /// <summary>True when this is the PC's first backup (the welcome wizard), false when adding another.</summary>
+    public bool IsFirstBackup { get; }
+
+    public string WelcomeTitle => IsFirstBackup ? "Welcome" : "New backup";
+
+    public string WelcomeText => IsFirstBackup ? "Four quick steps, then your first backup." : "Your other backups keep running as they are.";
+
+    internal IReadOnlyList<BackupProfile> ExistingBackups => _services.Backups;
+
     public IReadOnlyList<WizardStep> Steps { get; } =
     [
-        new(1, "Folders"),
+        new(1, "Name and folders"),
         new(2, "Backup drive"),
         new(3, "Missing files"),
         new(4, "Start"),
     ];
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextCommand))]
+    public partial string Name { get; set; }
+
+    /// <summary>Why the name can't be used, if it can't.</summary>
+    public string? NameProblem => Name.Trim().Length == 0 ? "Give this backup a name."
+        : _services.Backups.Any(b => b.Name.Equals(Name.Trim(), StringComparison.OrdinalIgnoreCase)) ? $"You already have a backup called \"{Name.Trim()}\"."
+        : null;
+
+    partial void OnNameChanged(string value) => OnPropertyChanged(nameof(NameProblem));
 
     public ObservableCollection<FolderChoiceViewModel> Folders { get; } = [];
 
@@ -56,7 +95,8 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     /// <summary>Opens a folder picker. Set by the window so this class stays free of UI code.</summary>
     public Func<string?>? PickFolder { get; set; }
 
-    public event Action? Completed;
+    /// <summary>Raised with the new backup once it's created and saved.</summary>
+    public event Action<BackupProfile>? Completed;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsStep1), nameof(IsStep2), nameof(IsStep3), nameof(IsStep4), nameof(IsLastStep), nameof(CurrentStep))]
@@ -95,6 +135,9 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     // Step 4 summary
 
     [ObservableProperty]
+    public partial string SummaryName { get; set; } = "";
+
+    [ObservableProperty]
     public partial string SummaryFolders { get; set; } = "";
 
     [ObservableProperty]
@@ -113,7 +156,7 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
 
     bool CanGoNext() => Step switch
     {
-        1 => SelectedFolders.Any(),
+        1 => SelectedFolders.Any() && NameProblem is null,
         2 => SelectedDrive is not null,
         3 => true,
         _ => false,
@@ -157,7 +200,13 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
 
     void AddFolderChoice(string name, string path, bool selected)
     {
-        var choice = new FolderChoiceViewModel(this, name, Path.TrimEndingDirectorySeparator(path)) { IsSelected = selected };
+        string folder = Path.TrimEndingDirectorySeparator(path);
+        var holders = _services.Backups.Where(b => b.Sources.Any(s => s.Path.Equals(folder, StringComparison.OrdinalIgnoreCase))).Select(b => b.Name).ToList();
+        var choice = new FolderChoiceViewModel(this, name, folder)
+        {
+            IsSelected = selected,
+            AlsoIn = holders.Count == 0 ? "" : "In " + string.Join(", ", holders),
+        };
         Folders.Add(choice);
         _ = choice.MeasureAsync(_sizing.Token);
     }
@@ -217,11 +266,13 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
         var policy = Policies.First(p => p.IsSelected).Policy;
         try
         {
-            var profile = await Task.Run(() => BackupSetup.CreateProfile(target, folders));
+            string name = Name.Trim();
+            var existing = _services.Backups.ToList();
+            var profile = await Task.Run(() => BackupSetup.CreateProfile(target, folders, name, existing));
             profile.MissingFilePolicy = policy;
-            _services.SaveProfile(profile);
+            _services.Add(profile);
             _sizing.Cancel();
-            Completed?.Invoke();
+            Completed?.Invoke(profile);
         }
         catch (Exception e) when (e is DriveSyncException or IOException or UnauthorizedAccessException)
         {
@@ -286,7 +337,8 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     {
         var selected = SelectedFolders.ToList();
         SummaryFolders = string.Join("\n", selected.Select(f => $"{f.Name}  ({f.Path})"));
-        SummaryDrive = SelectedDrive is null ? "" : $"{Path.Combine(SelectedDrive.Root, BackupSetup.DefaultFolderName)}  ·  {SelectedDrive.Title}";
+        SummaryName = Name.Trim();
+        SummaryDrive = SelectedDrive is null ? "" : $"{BackupSetup.PlannedFolder(SelectedDrive.Root, Name.Trim(), _services.Backups)}  ·  {SelectedDrive.Title}";
         SummaryPolicy = Policies.First(p => p.IsSelected).Title.Replace(" (recommended)", "");
         if (selected.Any(f => f.Bytes is null))
         {
@@ -312,6 +364,9 @@ public sealed partial class FolderChoiceViewModel(SetupWizardViewModel owner, st
     public string Name { get; } = name;
 
     public string Path { get; } = path;
+
+    /// <summary>"In Personal files" when another backup already copies this folder.</summary>
+    public string AlsoIn { get; init; } = "";
 
     [ObservableProperty]
     public partial bool IsSelected { get; set; }
@@ -394,7 +449,8 @@ public sealed partial class DriveChoiceViewModel : ObservableObject
 
     public bool IsCustomFolder { get; private init; }
 
-    public bool HasExistingBackup { get; private init; }
+    /// <summary>"Has Personal files" for backups the app knows, or "Has a DriveSync backup" for one it would reconnect to.</summary>
+    public string ExistingNote { get; private init; } = "";
 
     [ObservableProperty]
     public partial bool IsSelected { get; set; }
@@ -403,6 +459,16 @@ public sealed partial class DriveChoiceViewModel : ObservableObject
     {
         if (value)
             _owner.OnDriveSelected(this);
+    }
+
+    static string NoteFor(string place, IReadOnlyList<BackupProfile> known)
+    {
+        var here = known.Where(b => b.LastKnownRoot is { } r && string.Equals(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(r)),
+            Path.TrimEndingDirectorySeparator(place), StringComparison.OrdinalIgnoreCase)).Select(b => b.Name).ToList();
+        if (here.Count > 0)
+            return "Has " + string.Join(", ", here);
+        string? id = BackupLocation.ReadDriveId(Path.Combine(place, BackupSetup.DefaultFolderName));
+        return id is not null && !known.Any(b => b.DriveId.Equals(id, StringComparison.OrdinalIgnoreCase)) ? "Has a DriveSync backup" : "";
     }
 
     internal static DriveChoiceViewModel FromDrive(SetupWizardViewModel owner, DriveInfo drive, string systemRoot)
@@ -423,7 +489,7 @@ public sealed partial class DriveChoiceViewModel : ObservableObject
             UsedPercent = total > 0 ? 100.0 * (total - free) / total : 0,
             SpaceText = $"{Formatting.Size(free)} free of {Formatting.Size(total)}",
             IsRemovable = drive.DriveType == DriveType.Removable,
-            HasExistingBackup = BackupLocation.ReadDriveId(Path.Combine(root, BackupSetup.DefaultFolderName)) is not null,
+            ExistingNote = NoteFor(root, owner.ExistingBackups),
         };
     }
 
@@ -434,7 +500,7 @@ public sealed partial class DriveChoiceViewModel : ObservableObject
         {
             IsCustomFolder = true,
             SpaceText = "",
-            HasExistingBackup = BackupLocation.ReadDriveId(Path.Combine(path, BackupSetup.DefaultFolderName)) is not null,
+            ExistingNote = NoteFor(path, owner.ExistingBackups),
         };
     }
 }

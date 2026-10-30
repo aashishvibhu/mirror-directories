@@ -16,7 +16,7 @@
     </UserControl.Resources>
 
     <Grid>
-        <Grid Margin="36,24,36,24" IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}">
+        <Grid Margin="36,16,36,24" IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -27,8 +27,7 @@
 
             <!--  Header  -->
             <StackPanel>
-                <TextBlock Style="{StaticResource PageTitle}" Text="Missing files" />
-                <TextBlock Margin="0,8,0,0" Style="{StaticResource Secondary}" Text="{Binding Headline}" />
+                <TextBlock Style="{StaticResource Secondary}" Text="{Binding Headline}" />
             </StackPanel>
 
             <!--  What each answer means, always visible  -->

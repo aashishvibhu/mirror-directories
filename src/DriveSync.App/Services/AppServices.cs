@@ -2,27 +2,29 @@ using DriveSync.Core;
 using DriveSync.Core.Engine;
 using DriveSync.Core.Model;
 using DriveSync.Core.RecycleBin;
+using DriveSync.Core.Storage;
 
 namespace DriveSync.App.Services;
 
-/// <summary>What the app shares between screens: the saved profile, the Recycle Bin, and opening the backup drive.</summary>
+/// <summary>What the app shares between screens: the backups, the Recycle Bin, and opening a backup's drive.</summary>
 public sealed class AppServices
 {
-    AppServices(ProfileStore profiles, IRecycleBin recycleBin, bool usesStandInRecycleBin)
+    AppServices(BackupStore store, IRecycleBin recycleBin, bool usesStandInRecycleBin)
     {
-        Profiles = profiles;
+        Store = store;
         RecycleBin = recycleBin;
         UsesStandInRecycleBin = usesStandInRecycleBin;
     }
 
-    public ProfileStore Profiles { get; }
+    public BackupStore Store { get; }
 
     public IRecycleBin RecycleBin { get; }
 
     /// <summary>True in demo and test runs, where a folder stands in for the Recycle Bin.</summary>
     public bool UsesStandInRecycleBin { get; }
 
-    public BackupProfile? Profile { get; private set; }
+    /// <summary>Every backup set up on this PC, in the order they were added.</summary>
+    public List<BackupProfile> Backups { get; } = [];
 
     /// <summary>
     /// Normal runs keep settings in <c>%APPDATA%\DriveSync</c> and use the real Recycle Bin.
@@ -32,47 +34,59 @@ public sealed class AppServices
     {
         string? dataDir = Environment.GetEnvironmentVariable("DRIVESYNC_DATA_DIR");
         string? binDir = Environment.GetEnvironmentVariable("DRIVESYNC_RECYCLE_BIN_DIR");
-        var profiles = new ProfileStore(string.IsNullOrEmpty(dataDir) ? null : Path.Combine(dataDir, "profile.json"));
+        var store = new BackupStore(string.IsNullOrEmpty(dataDir) ? null : dataDir);
         return string.IsNullOrEmpty(binDir)
-            ? new AppServices(profiles, new WindowsRecycleBin(), usesStandInRecycleBin: false)
-            : new AppServices(profiles, new FolderRecycleBin(binDir), usesStandInRecycleBin: true);
+            ? new AppServices(store, new WindowsRecycleBin(), usesStandInRecycleBin: false)
+            : new AppServices(store, new FolderRecycleBin(binDir), usesStandInRecycleBin: true);
     }
 
     /// <summary>For tests: settings in <paramref name="dataDir"/> and a given Recycle Bin.</summary>
     internal static AppServices Create(string dataDir, IRecycleBin recycleBin) =>
-        new(new ProfileStore(Path.Combine(dataDir, "profile.json")), recycleBin, usesStandInRecycleBin: true);
+        new(new BackupStore(dataDir), recycleBin, usesStandInRecycleBin: true);
 
-    public BackupProfile? LoadProfile() => Profile = Profiles.Load();
-
-    public void SaveProfile(BackupProfile profile)
+    public void Load()
     {
-        Profiles.Save(profile);
-        Profile = profile;
+        Backups.Clear();
+        Backups.AddRange(Store.Load());
     }
 
-    /// <summary>Opens the backup drive. Throws <see cref="DriveSyncException"/> if it isn't connected or is busy.</summary>
-    public DriveSyncSession OpenSession()
+    public void Save() => Store.Save(Backups);
+
+    public void Add(BackupProfile backup)
     {
-        var profile = Profile ?? throw new DriveSyncException("Set up DriveSync first.");
-        string? before = profile.LastKnownRoot;
-        var session = DriveSyncSession.Open(profile, RecycleBin, Profiles.MirrorDirectory);
-        if (!string.Equals(before, profile.LastKnownRoot, StringComparison.OrdinalIgnoreCase))
-            Profiles.Save(profile); // the drive came back under a different letter
+        Backups.Add(backup);
+        Save();
+    }
+
+    /// <summary>Forgets a backup. Nothing on its drive is touched.</summary>
+    public void Remove(BackupProfile backup)
+    {
+        Backups.Remove(backup);
+        Save();
+    }
+
+    /// <summary>Opens a backup's drive. Throws <see cref="DriveSyncException"/> if it isn't connected or is busy.</summary>
+    public DriveSyncSession OpenSession(BackupProfile backup)
+    {
+        string? before = backup.LastKnownRoot;
+        var session = DriveSyncSession.Open(backup, RecycleBin, Store.MirrorDirectory, Store.OffloadListPath);
+        if (!string.Equals(before, backup.LastKnownRoot, StringComparison.OrdinalIgnoreCase))
+            Save(); // the drive came back under a different letter
         return session;
     }
 
     /// <summary>
-    /// Opens the backup drive on a background thread. Screens open it briefly to read or change a few records,
+    /// Opens a backup's drive on a background thread. Screens open it briefly to read or change a few records,
     /// so if another of those quick tasks holds it, this waits a few seconds before giving up.
     /// </summary>
-    public async Task<DriveSyncSession> OpenSessionAsync(CancellationToken ct = default)
+    public async Task<DriveSyncSession> OpenSessionAsync(BackupProfile backup, CancellationToken ct = default)
     {
         var giveUp = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (true)
         {
             try
             {
-                return await Task.Run(OpenSession, ct);
+                return await Task.Run(() => OpenSession(backup), ct);
             }
             catch (DriveBusyException) when (DateTime.UtcNow < giveUp)
             {
@@ -81,7 +95,8 @@ public sealed class AppServices
         }
     }
 
-    /// <summary>The PC's copy of the catalog, used to show counts while the drive is unplugged.</summary>
-    public string? MirrorCatalogPath =>
-        Profile is null ? null : Path.Combine(Profiles.MirrorDirectory, $"catalog-{Profile.DriveId}.db");
+    /// <summary>The PC's copy of a backup's catalog, used to show counts while its drive is unplugged.</summary>
+    public string MirrorCatalogPath(BackupProfile backup) => Path.Combine(Store.MirrorDirectory, $"catalog-{backup.DriveId}.db");
+
+    public static bool IsConnected(BackupProfile backup) => BackupLocation.Find(backup) is not null;
 }

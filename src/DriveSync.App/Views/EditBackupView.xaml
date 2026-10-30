@@ -1,0 +1,278 @@
+<UserControl
+    x:Class="DriveSync.App.Views.EditBackupView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:vm="clr-namespace:DriveSync.App.ViewModels"
+    d:DataContext="{d:DesignInstance Type=vm:EditBackupViewModel}"
+    mc:Ignorable="d">
+
+    <Grid>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}">
+            <StackPanel MaxWidth="1040" Margin="36,18,36,28">
+                <TextBlock FontSize="13">
+                    <Hyperlink Command="{Binding BackCommand}" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" TextDecorations="None">
+                        <Run Text="‹ " /><Run Text="{Binding PageName, Mode=OneWay}" />
+                    </Hyperlink>
+                </TextBlock>
+                <TextBlock Margin="0,6,0,16" Style="{StaticResource PageTitle}" Text="Edit backup" />
+
+                <!--  What just happened  -->
+                <Border Margin="0,0,0,12" Padding="16,12" CornerRadius="8" Visibility="{Binding Message, Converter={StaticResource EmptyToCollapsed}}">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{DynamicResource SystemFillColorSuccessBackgroundBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding MessageIsWarning}" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource SystemFillColorCautionBackgroundBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Style="{StaticResource Body}" Text="{Binding Message}" />
+                </Border>
+                <Border Margin="0,0,0,12" Padding="16,12" CornerRadius="8" Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}"
+                        Visibility="{Binding Error, Converter={StaticResource EmptyToCollapsed}}">
+                    <TextBlock Style="{StaticResource Body}" Text="{Binding Error}" />
+                </Border>
+
+                <!--  Name  -->
+                <Border Padding="20,14" Style="{StaticResource Panel}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock VerticalAlignment="Center" Style="{StaticResource Strong}" Text="Name" />
+                        <ui:TextBox Grid.Column="1" Width="320" AutomationProperties.Name="Backup name" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center" Style="{StaticResource Caption}" Text="Shown in the menu and on the overview." />
+                    </Grid>
+                </Border>
+
+                <!--  Folders  -->
+                <Border Margin="0,12,0,0" Padding="0" Style="{StaticResource Panel}">
+                    <StackPanel>
+                        <Grid Margin="20,12">
+                            <TextBlock VerticalAlignment="Center" Style="{StaticResource Strong}" Text="Folders backed up" />
+                            <ui:Button HorizontalAlignment="Right" Command="{Binding AddFolderCommand}" Content="Add folder…" Icon="{ui:SymbolIcon Add24}" />
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding Folders}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:FolderRowViewModel}">
+                                    <Border Padding="20,10" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon Margin="0,0,14,0" VerticalAlignment="Center" FontSize="20" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" Symbol="Folder24" />
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Style="{StaticResource Strong}" Text="{Binding Name}" />
+                                                <TextBlock Style="{StaticResource Caption}" Text="{Binding Detail}" ToolTip="{Binding Detail}" />
+                                            </StackPanel>
+                                            <ui:Button Grid.Column="2" Appearance="Transparent" Command="{Binding RemoveCommand}" Content="Remove…"
+                                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <ItemsControl ItemsSource="{Binding RemovedFolders}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:FolderRowViewModel}">
+                                    <Border Padding="20,10" Background="{DynamicResource SubtleFillColorSecondaryBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon Margin="0,0,14,0" VerticalAlignment="Center" FontSize="20" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Symbol="Archive24" />
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Style="{StaticResource Body}">
+                                                    <Run Text="{Binding Name, Mode=OneWay}" /><Run FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Text="{Binding RemovedOn, Mode=OneWay, StringFormat={} · {0}}" />
+                                                </TextBlock>
+                                                <TextBlock Style="{StaticResource Caption}" Text="{Binding Detail}" ToolTip="{Binding Path}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <ui:Button Appearance="Transparent" Command="{Binding AddBackCommand}" Content="Add back" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                                <ui:Button Margin="4,0,0,0" Appearance="Transparent" Command="{Binding RecycleCommand}" Content="Send to Recycle Bin…" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!--  Destination  -->
+                <Border Margin="0,12,0,0" Padding="20,12" Style="{StaticResource Panel}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock VerticalAlignment="Center" Style="{StaticResource Strong}" Text="Backup goes to" />
+                        <ui:SymbolIcon Grid.Column="1" Margin="0,0,12,0" VerticalAlignment="Center" FontSize="20" Symbol="HardDrive20" />
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Style="{StaticResource Body}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Text="{Binding DestinationPath}" ToolTip="{Binding DestinationPath}" />
+                            <TextBlock Style="{StaticResource Caption}" Text="{Binding DestinationDetail}" />
+                        </StackPanel>
+                        <ui:Button Grid.Column="3" Margin="12,0,0,0" Command="{Binding OpenMoveCommand}" Content="Move to another drive…" />
+                    </Grid>
+                </Border>
+
+                <!--  Missing-files rule  -->
+                <Border Margin="0,12,0,0" Padding="20,14" Style="{StaticResource Panel}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource Strong}" Text="When a backed-up file disappears from this PC" />
+                        <ItemsControl Margin="0,10,0,0" ItemsSource="{Binding Policies}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:PolicyChoiceViewModel}">
+                                    <RadioButton Margin="0,0,0,6" GroupName="edit-policy" IsChecked="{Binding IsSelected}">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource Body}" Text="{Binding Title}" />
+                                            <TextBlock Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap" Text="{Binding Description}" />
+                                        </StackPanel>
+                                    </RadioButton>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!--  Remove the backup  -->
+                <Border Margin="0,12,0,0" Padding="20,12" Style="{StaticResource Panel}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Strong}" Text="Remove this backup from DriveSync" />
+                            <TextBlock Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap"
+                                       Text="The app forgets it. Nothing on the drive changes, and you can reconnect it later with Add backup." />
+                        </StackPanel>
+                        <ui:Button Grid.Column="1" Margin="12,0,0,0" Command="{Binding AskRemoveBackupCommand}" Content="Remove backup…"
+                                   BorderBrush="{DynamicResource SystemFillColorCriticalBrush}" Foreground="{DynamicResource SystemFillColorCriticalBrush}" />
+                    </Grid>
+                </Border>
+
+                <StackPanel Margin="0,20,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
+                    <ui:Button MinWidth="96" Command="{Binding BackCommand}" Content="Cancel" />
+                    <ui:Button Margin="8,0,0,0" Appearance="Primary" Command="{Binding SaveCommand}" Content="Save changes" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <ui:ProgressRing Width="40" Height="40" HorizontalAlignment="Center" VerticalAlignment="Center" IsIndeterminate="True"
+                         Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
+
+        <!--  Stop backing up a folder  -->
+        <Grid Background="{DynamicResource SmokeFillColorDefaultBrush}" Visibility="{Binding IsRemoveFolderOpen, Converter={StaticResource BoolToVisibility}}">
+            <Border Width="580" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8">
+                <StackPanel>
+                    <StackPanel Margin="28,24,28,20">
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding RemoveFolderTitle}" />
+                        <TextBlock Margin="0,12,0,14" Style="{StaticResource Body}" Text="{Binding RemoveFolderMessage}" />
+                        <RadioButton GroupName="keep-files" IsChecked="{Binding KeepRemovedFiles}" Style="{StaticResource ChoiceCard}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource Strong}" Text="Keep them on the backup (recommended)" />
+                                <TextBlock Margin="0,4,0,0" Style="{StaticResource Secondary}" Text="They stay under Removed folders, and you can restore them or add the folder back any time." />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton GroupName="keep-files" IsChecked="{Binding KeepRemovedFiles, Converter={StaticResource InverseBool}}" Style="{StaticResource ChoiceCard}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource Strong}" Text="Send them to the backup drive's Recycle Bin" />
+                                <TextBlock Margin="0,4,0,0" Style="{StaticResource Secondary}" Text="{Binding RecycleOptionDetail}" />
+                            </StackPanel>
+                        </RadioButton>
+                        <TextBlock Margin="0,4,0,0" Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap" Text="{Binding RemoveFolderNote}" />
+                    </StackPanel>
+                    <Border Padding="28,14" Background="{DynamicResource LayerFillColorDefaultBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" CornerRadius="0,0,8,8">
+                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                            <ui:Button MinWidth="96" Command="{Binding CancelRemoveFolderCommand}" Content="Cancel" />
+                            <ui:Button Margin="8,0,0,0" Appearance="Primary" Command="{Binding ConfirmRemoveFolderCommand}" Content="Stop backing up" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!--  Move to another drive  -->
+        <Grid Background="{DynamicResource SmokeFillColorDefaultBrush}" Visibility="{Binding IsMoveOpen, Converter={StaticResource BoolToVisibility}}">
+            <Border Width="640" MaxHeight="660" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8">
+                <DockPanel>
+                    <Border Padding="28,14" Background="{DynamicResource LayerFillColorDefaultBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0"
+                            CornerRadius="0,0,8,8" DockPanel.Dock="Bottom">
+                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                            <ui:Button MinWidth="96" Command="{Binding CancelMoveCommand}" Content="Cancel" />
+                            <ui:Button Margin="8,0,0,0" Appearance="Primary" Command="{Binding StartMoveCommand}" Content="Start moving" />
+                        </StackPanel>
+                    </Border>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="28,24,28,20">
+                            <TextBlock Style="{StaticResource SectionTitle}">
+                                <Run Text="Move " /><Run Text="{Binding Name, Mode=OneWay}" /><Run Text=" to another drive" />
+                            </TextBlock>
+                            <TextBlock Margin="0,16,0,8" Style="{StaticResource Strong}" Text="New drive" />
+                            <ItemsControl ItemsSource="{Binding MoveTargets}" IsEnabled="{Binding IsMoving, Converter={StaticResource InverseBool}}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:MoveTargetViewModel}">
+                                        <RadioButton GroupName="move-target" IsChecked="{Binding IsSelected}" IsEnabled="{Binding IsAvailable}" Style="{StaticResource ChoiceCard}">
+                                            <StackPanel>
+                                                <TextBlock Style="{StaticResource Strong}" Text="{Binding Title}" />
+                                                <TextBlock Style="{StaticResource Caption}" Text="{Binding Detail}" />
+                                                <TextBlock Margin="0,4,0,0" Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap" Text="{Binding Note}"
+                                                           Visibility="{Binding Note, Converter={StaticResource EmptyToCollapsed}}" />
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <ui:Button HorizontalAlignment="Left" Command="{Binding ChooseMoveFolderCommand}" Content="Use a folder instead…" Icon="{ui:SymbolIcon FolderOpen24}"
+                                       IsEnabled="{Binding IsMoving, Converter={StaticResource InverseBool}}" />
+                            <TextBlock Margin="0,16,0,0" Style="{StaticResource Body}" Text="{Binding MoveSummary}" />
+                            <Border Margin="0,12,0,0" Padding="14,12" CornerRadius="8" Background="{DynamicResource SystemFillColorSuccessBackgroundBrush}">
+                                <TextBlock Style="{StaticResource Body}" Text="The old drive stays exactly as it is. DriveSync never deletes the old backup; clear it yourself once you're happy with the new drive." />
+                            </Border>
+                            <StackPanel Margin="0,16,0,0" Visibility="{Binding IsMoving, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Style="{StaticResource Strong}" Text="{Binding MovePhase}" />
+                                <ProgressBar Height="4" Margin="0,8,0,6" Maximum="100" Value="{Binding MovePercent, Mode=OneWay}" />
+                                <TextBlock Style="{StaticResource Caption}" Text="{Binding MoveDetail}" />
+                            </StackPanel>
+                            <Border Margin="0,12,0,0" Padding="14,12" CornerRadius="8" Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                                    Visibility="{Binding MoveError, Converter={StaticResource EmptyToCollapsed}}">
+                                <TextBlock Style="{StaticResource Body}" Text="{Binding MoveError}" />
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <!--  Yes/no confirmation  -->
+        <Grid Background="{DynamicResource SmokeFillColorDefaultBrush}" Visibility="{Binding IsConfirmOpen, Converter={StaticResource BoolToVisibility}}">
+            <Border Width="520" Padding="28,24" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ConfirmTitle}" />
+                    <TextBlock Margin="0,12,0,24" Style="{StaticResource Body}" Text="{Binding ConfirmMessage}" />
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                        <ui:Button MinWidth="96" Command="{Binding ConfirmNoCommand}" Content="Cancel" />
+                        <ui:Button Margin="8,0,0,0" Appearance="Danger" Command="{Binding ConfirmYesCommand}" Content="{Binding ConfirmButton}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

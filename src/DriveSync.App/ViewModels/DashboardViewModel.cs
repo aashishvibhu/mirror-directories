@@ -22,7 +22,7 @@ public enum BackupStatus
 public sealed record ActivityRow(string What, string Item, string When);
 
 /// <summary>Home: backup status, the sync button, live progress, totals and recent activity.</summary>
-public sealed partial class DashboardViewModel(MainViewModel main) : ObservableObject
+public sealed partial class DashboardViewModel(BackupPageViewModel page) : ObservableObject
 {
     CancellationTokenSource? _cancel;
     SyncControl? _control;
@@ -110,8 +110,14 @@ public sealed partial class DashboardViewModel(MainViewModel main) : ObservableO
 
     bool CanSync() => IsDriveConnected && !IsSyncing;
 
+    partial void OnIsSyncingChanged(bool value) => page.OnSyncStateChanged();
+
+    partial void OnIsDriveConnectedChanged(bool value) => page.OnSyncStateChanged();
+
+    partial void OnStatusChanged(BackupStatus value) => page.OnSyncStateChanged();
+
     [RelayCommand(CanExecute = nameof(CanSync))]
-    Task SyncNow() => main.ShowPreviewAsync();
+    Task SyncNow() => page.SyncNowAsync();
 
     [RelayCommand]
     void PauseOrResume()
@@ -141,16 +147,16 @@ public sealed partial class DashboardViewModel(MainViewModel main) : ObservableO
     }
 
     [RelayCommand]
-    Task ReviewMissing() => main.ShowMissingAsync();
+    Task ReviewMissing() => page.ShowMissingAsync();
 
     /// <summary>Reads totals and recent activity from the drive, or from the PC's copy when the drive is unplugged.</summary>
     public async Task RefreshAsync()
     {
-        if (main.Services.Profile is null || IsSyncing)
+        if (IsSyncing)
             return;
         try
         {
-            using var session = await main.Services.OpenSessionAsync();
+            using var session = await page.OpenSessionAsync();
             var (summary, activity) = await Task.Run(() => (session.GetSummary(), session.Catalog.RecentActivity(40)));
             Show(summary, activity, connected: true);
         }
@@ -170,13 +176,13 @@ public sealed partial class DashboardViewModel(MainViewModel main) : ObservableO
 
     (BackupSummary Summary, List<ActivityEntry> Activity)? ReadOfflineCopy()
     {
-        string? path = main.Services.MirrorCatalogPath;
+        string path = page.MirrorCatalogPath;
         if (path is null || !File.Exists(path))
             return null;
         try
         {
             using var catalog = Catalog.OpenReadOnly(path);
-            return (DriveSyncSession.ReadSummary(catalog, main.Services.Profile?.LastKnownRoot ?? ""), catalog.RecentActivity(40));
+            return (DriveSyncSession.ReadSummary(catalog, page.Profile.LastKnownRoot ?? ""), catalog.RecentActivity(40));
         }
         catch (SqliteException)
         {
@@ -198,7 +204,7 @@ public sealed partial class DashboardViewModel(MainViewModel main) : ObservableO
         IsDriveConnected = connected;
         int active = summary.Count(FileState.Active), archived = summary.Count(FileState.Archived);
         PendingCount = summary.Count(FileState.Pending);
-        main.PendingCount = PendingCount;
+        page.PendingCount = PendingCount;
         ProtectedCount = active.ToString("N0");
         ProtectedSize = Formatting.Size(summary.Bytes(FileState.Active));
         OffloadedCount = archived.ToString("N0");
@@ -259,12 +265,12 @@ public sealed partial class DashboardViewModel(MainViewModel main) : ObservableO
     };
 
     /// <summary>First backup straight after setup: scans and copies everything, showing progress here.</summary>
-    public async Task RunFirstBackupAsync()
+    public async Task SyncWithoutReviewAsync()
     {
         DriveSyncSession session;
         try
         {
-            session = await main.Services.OpenSessionAsync();
+            session = await page.OpenSessionAsync();
         }
         catch (DriveSyncException e)
         {

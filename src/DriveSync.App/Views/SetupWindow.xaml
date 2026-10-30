@@ -39,8 +39,8 @@
 
             <!--  Steps  -->
             <StackPanel Margin="28,20,16,0">
-                <TextBlock Style="{StaticResource SectionTitle}" Text="Welcome" />
-                <TextBlock Margin="0,6,0,24" Style="{StaticResource Secondary}" Text="Four quick steps, then your first backup." />
+                <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding WelcomeTitle}" />
+                <TextBlock Margin="0,6,0,24" Style="{StaticResource Secondary}" Text="{Binding WelcomeText}" />
                 <ItemsControl ItemsSource="{Binding Steps}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate DataType="{x:Type vm:WizardStep}">
@@ -97,8 +97,14 @@
 
                         <!--  Step 1: folders  -->
                         <StackPanel Visibility="{Binding IsStep1, Converter={StaticResource BoolToVisibility}}">
-                            <TextBlock Style="{StaticResource StepTitle}" Text="Which folders should DriveSync back up?" />
-                            <TextBlock Margin="0,8,0,20" Style="{StaticResource Secondary}" Text="Tick each folder you want backed up. Nothing is selected for you." />
+                            <TextBlock Style="{StaticResource StepTitle}" Text="Name this backup and pick its folders" />
+                            <TextBlock Margin="0,16,0,6" Style="{StaticResource Strong}" Text="Name" />
+                            <ui:TextBox Width="340" HorizontalAlignment="Left" AutomationProperties.Name="Backup name" PlaceholderText="For example: Personal files"
+                                        Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCriticalBrush}" Style="{StaticResource Caption}" Text="{Binding NameProblem}"
+                                       Visibility="{Binding NameProblem, Converter={StaticResource EmptyToCollapsed}}" />
+                            <TextBlock Margin="0,20,0,4" Style="{StaticResource Strong}" Text="Folders" />
+                            <TextBlock Margin="0,0,0,12" Style="{StaticResource Secondary}" Text="Tick each folder you want in this backup. Nothing is selected for you." />
                             <ItemsControl ItemsSource="{Binding Folders}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate DataType="{x:Type vm:FolderChoiceViewModel}">
@@ -109,6 +115,7 @@
                                                     <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
                                                 <CheckBox VerticalAlignment="Center" AutomationProperties.Name="{Binding Name}" IsChecked="{Binding IsSelected}" />
                                                 <ui:SymbolIcon Grid.Column="1" Margin="4,0,14,0" FontSize="22" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" Symbol="Folder24" />
@@ -116,7 +123,11 @@
                                                     <TextBlock Style="{StaticResource Strong}" Text="{Binding Name}" />
                                                     <TextBlock Style="{StaticResource Caption}" Text="{Binding Path}" />
                                                 </StackPanel>
-                                                <TextBlock Grid.Column="3" Margin="16,0,0,0" VerticalAlignment="Center" Style="{StaticResource Caption}" Text="{Binding SizeText}" />
+                                                <Border Grid.Column="3" Margin="12,0,0,0" Background="{DynamicResource ControlFillColorSecondaryBrush}" Style="{StaticResource Pill}"
+                                                        Visibility="{Binding AlsoIn, Converter={StaticResource EmptyToCollapsed}}">
+                                                    <TextBlock FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Text="{Binding AlsoIn}" />
+                                                </Border>
+                                                <TextBlock Grid.Column="4" Margin="16,0,0,0" VerticalAlignment="Center" Style="{StaticResource Caption}" Text="{Binding SizeText}" />
                                             </Grid>
                                         </Border>
                                     </DataTemplate>
@@ -152,8 +163,8 @@
                                                     <TextBlock Style="{StaticResource Caption}" Text="{Binding SpaceText}" Visibility="{Binding SpaceText, Converter={StaticResource EmptyToCollapsed}}" />
                                                 </StackPanel>
                                                 <Border Grid.Column="2" Background="{DynamicResource SystemFillColorSuccessBackgroundBrush}" Style="{StaticResource Pill}"
-                                                        Visibility="{Binding HasExistingBackup, Converter={StaticResource BoolToVisibility}}">
-                                                    <TextBlock FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Text="Has a DriveSync backup" />
+                                                        Visibility="{Binding ExistingNote, Converter={StaticResource EmptyToCollapsed}}">
+                                                    <TextBlock FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Text="{Binding ExistingNote}" />
                                                 </Border>
                                             </Grid>
                                         </RadioButton>
@@ -213,17 +224,20 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Folders" />
-                                    <TextBlock Grid.Row="0" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummaryFolders}" />
-                                    <TextBlock Grid.Row="1" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Backup goes to" />
-                                    <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummaryDrive}" />
-                                    <TextBlock Grid.Row="2" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Missing files" />
-                                    <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummaryPolicy}" />
-                                    <TextBlock Grid.Row="3" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Size" />
-                                    <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummarySize}" />
-                                    <TextBlock Grid.Row="4" Style="{StaticResource Secondary}" Text="Time" />
-                                    <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource Body}" Text="{Binding SummaryTime}" />
+                                    <TextBlock Grid.Row="0" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Name" />
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummaryName}" />
+                                    <TextBlock Grid.Row="1" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Folders" />
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummaryFolders}" />
+                                    <TextBlock Grid.Row="2" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Backup goes to" />
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummaryDrive}" />
+                                    <TextBlock Grid.Row="3" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Missing files" />
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummaryPolicy}" />
+                                    <TextBlock Grid.Row="4" Margin="0,0,0,14" Style="{StaticResource Secondary}" Text="Size" />
+                                    <TextBlock Grid.Row="4" Grid.Column="1" Margin="0,0,0,14" Style="{StaticResource Body}" Text="{Binding SummarySize}" />
+                                    <TextBlock Grid.Row="5" Style="{StaticResource Secondary}" Text="Time" />
+                                    <TextBlock Grid.Row="5" Grid.Column="1" Style="{StaticResource Body}" Text="{Binding SummaryTime}" />
                                 </Grid>
                             </Border>
                             <Border Margin="0,16,0,0" Padding="16,12" CornerRadius="8" Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}">

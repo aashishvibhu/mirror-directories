@@ -180,6 +180,22 @@ public sealed class Catalog : IDisposable
         return totals;
     }
 
+    /// <summary>Files and bytes on the backup per top-level folder (each folder is one backed-up PC folder), Deleted excluded.</summary>
+    public Dictionary<string, (int Files, long Bytes)> TotalsByFolder()
+    {
+        using var cmd = Command("""
+            SELECT CASE WHEN instr(key, '\') > 0 THEN substr(key, 1, instr(key, '\') - 1) ELSE key END AS folder,
+                   COUNT(*), COALESCE(SUM(size), 0)
+            FROM files WHERE state <> $deleted GROUP BY folder
+            """);
+        cmd.Parameters.AddWithValue("$deleted", (int)FileState.Deleted);
+        using var reader = cmd.ExecuteReader();
+        var totals = new Dictionary<string, (int, long)>(KeyPath.Comparer);
+        while (reader.Read())
+            totals[reader.GetString(0)] = (reader.GetInt32(1), reader.GetInt64(2));
+        return totals;
+    }
+
     public void Log(string action, string? key, string? detail = null)
     {
         using var cmd = Command("INSERT INTO activity (time, action, key, detail) VALUES ($time, $action, $key, $detail)");

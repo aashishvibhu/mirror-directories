@@ -43,6 +43,14 @@ public sealed class CountToVisibilityConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => throw new NotSupportedException();
 }
 
+/// <summary>True for the "Backups" label in the left menu, which can't be selected.</summary>
+public sealed class IsNavHeaderConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => value is ViewModels.NavHeader;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => throw new NotSupportedException();
+}
+
 /// <summary>Shows an element when a count is zero, e.g. an empty-state message.</summary>
 public sealed class ZeroToVisibleConverter : IValueConverter
 {

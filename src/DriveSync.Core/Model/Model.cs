@@ -54,7 +54,13 @@ public sealed class FileRecord
 /// <summary>A folder on the PC that DriveSync backs up. <see cref="Name"/> is its folder name on the backup drive.</summary>
 public sealed record SourceFolder(string Name, string Path);
 
-/// <summary>Everything DriveSync needs to know about one PC-to-drive backup.</summary>
+/// <summary>
+/// A folder that used to be in a backup. Its files stay on the backup drive under <see cref="Name"/>
+/// unless the user sends them to the Recycle Bin.
+/// </summary>
+public sealed record RemovedFolder(string Name, string Path, DateTime RemovedUtc);
+
+/// <summary>Everything DriveSync needs to know about one backup: a set of folders going to one destination.</summary>
 public sealed class BackupProfile
 {
     public static readonly string[] DefaultExclusions =
@@ -62,6 +68,13 @@ public sealed class BackupProfile
         "desktop.ini", "Thumbs.db", "ehthumbs.db", ".DS_Store", "~$*", "*.tmp", "$RECYCLE.BIN", "System Volume Information",
     ];
 
+    /// <summary>Identifies the backup in the app. Unlike <see cref="DriveId"/>, it stays the same when the backup moves to another drive.</summary>
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>The name people see, such as "Personal files".</summary>
+    public string Name { get; set; } = "My backup";
+
+    /// <summary>Identifies the backup folder on the drive (its <c>drive.id</c> file).</summary>
     public string DriveId { get; set; } = "";
 
     public string BackupFolderName { get; set; } = BackupSetup.DefaultFolderName;
@@ -70,6 +83,9 @@ public sealed class BackupProfile
     public string? LastKnownRoot { get; set; }
 
     public List<SourceFolder> Sources { get; set; } = [];
+
+    /// <summary>Folders taken out of this backup whose files are still on the drive.</summary>
+    public List<RemovedFolder> RemovedFolders { get; set; } = [];
 
     public List<string> Exclusions { get; set; } = [.. DefaultExclusions];
 

@@ -26,7 +26,7 @@ public sealed class PreviewCategory(string title, SymbolRegular icon, string not
 }
 
 /// <summary>"Review changes": what a sync would do, shown before anything changes.</summary>
-public sealed partial class PreviewViewModel(MainViewModel main) : ObservableObject, IDisposable
+public sealed partial class PreviewViewModel(BackupPageViewModel page) : ObservableObject, IDisposable
 {
     DriveSyncSession? _session;
     SyncPlan? _plan;
@@ -62,7 +62,7 @@ public sealed partial class PreviewViewModel(MainViewModel main) : ObservableObj
     {
         try
         {
-            _session = await main.Services.OpenSessionAsync();
+            _session = await page.OpenSessionAsync();
             var progress = new Progress<SyncProgress>(p => ScanStatus = p.Phase == "Scanning"
                 ? $"Looking through your folders… {p.FilesDone:N0} files so far"
                 : "Checking for files that were moved or renamed…");
@@ -135,11 +135,11 @@ public sealed partial class PreviewViewModel(MainViewModel main) : ObservableObj
             return;
         var session = _session;
         _session = null; // the dashboard owns it now
-        main.ApplyPreview(session, _plan);
+        page.ApplyPreview(session, _plan);
     }
 
     [RelayCommand]
-    void Back() => main.ShowHome();
+    void Back() => page.ShowHome();
 
     public void Dispose()
     {

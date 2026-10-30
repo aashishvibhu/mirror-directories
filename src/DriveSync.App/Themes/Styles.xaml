@@ -9,6 +9,7 @@
     <local:EmptyToCollapsedConverter x:Key="EmptyToCollapsed" />
     <local:CountToVisibilityConverter x:Key="CountToVisibility" />
     <local:ZeroToVisibleConverter x:Key="ZeroToVisible" />
+    <local:IsNavHeaderConverter x:Key="IsNavHeader" />
 
     <!--  Text  -->
     <Style x:Key="PageTitle" TargetType="TextBlock">
@@ -111,6 +112,12 @@
                             </ControlTemplate>
                         </Setter.Value>
                     </Setter>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Converter={StaticResource IsNavHeader}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                            <Setter Property="Focusable" Value="False" />
+                        </DataTrigger>
+                    </Style.Triggers>
                 </Style>
             </Setter.Value>
         </Setter>

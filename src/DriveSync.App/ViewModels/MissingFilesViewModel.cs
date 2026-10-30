@@ -12,7 +12,7 @@ namespace DriveSync.App.ViewModels;
 /// "Missing files": backed-up files that left the PC without going through DriveSync.
 /// The user says why each one is gone: deleted on purpose, removed to free space, or decide later.
 /// </summary>
-public sealed partial class MissingFilesViewModel(MainViewModel main) : ObservableObject
+public sealed partial class MissingFilesViewModel(BackupPageViewModel page) : ObservableObject
 {
     readonly List<MissingGroupViewModel> _all = [];
     List<MissingFileViewModel>? _awaitingConfirmation;
@@ -85,7 +85,7 @@ public sealed partial class MissingFilesViewModel(MainViewModel main) : Observab
         try
         {
             IReadOnlyList<MissingFile> pending;
-            using (var session = await main.Services.OpenSessionAsync())
+            using (var session = await page.OpenSessionAsync())
                 pending = await Task.Run(session.GetPendingFiles);
             _all.Clear();
             foreach (var group in pending.GroupBy(m => GroupKey(m.Record.Key), KeyPath.Comparer).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
@@ -206,11 +206,11 @@ public sealed partial class MissingFilesViewModel(MainViewModel main) : Observab
         try
         {
             DecisionResult result;
-            using (var session = await main.Services.OpenSessionAsync())
+            using (var session = await page.OpenSessionAsync())
                 result = await Task.Run(() => session.ResolveMissing(keys, decision));
             var failed = result.Problems.Select(p => p.Key).ToHashSet(KeyPath.Comparer);
             Hide(files.Where(f => !failed.Contains(f.Key)).ToList());
-            main.PendingCount = Math.Max(0, main.PendingCount - result.Applied);
+            page.PendingCount = Math.Max(0, page.PendingCount - result.Applied);
 
             ResultIsWarning = result.Problems.Count > 0;
             string done = decision == MissingDecision.DeletedOnPurpose

@@ -6,7 +6,6 @@ using DriveSync.App.Services;
 using DriveSync.App.ViewModels;
 using DriveSync.App.Views;
 using DriveSync.Core;
-using DriveSync.Core.Engine;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
 
@@ -14,14 +13,17 @@ namespace DriveSync.App;
 
 /// <summary>
 /// Developer commands for trying the app without touching real files:
-/// <c>--dev-demo &lt;folder&gt;</c> builds sample folders, a backup and some history inside that folder;
-/// <c>--dev-screenshots &lt;folder&gt;</c> renders every screen, in light and dark, to PNG files.
+/// <c>--dev-demo &lt;folder&gt;</c> builds sample folders, three backups and some history inside that folder;
+/// <c>--dev-screenshots &lt;folder&gt;</c> renders every screen, in light and dark, to PNG files, then drives the
+/// main flows (stop backing up a folder, move a backup, sync all, remove a backup) on the demo data.
 /// Both refuse to run unless DRIVESYNC_DATA_DIR and DRIVESYNC_RECYCLE_BIN_DIR are set, so the
 /// real settings and the real Recycle Bin are never used.
 /// </summary>
 internal static class DevTools
 {
     public enum Command { Demo, Screenshots }
+
+    const string DemoMarker = ".drivesync-demo";
 
     public static bool TryGetCommand(string[] args, out Command command, out string argument)
     {
@@ -51,13 +53,11 @@ internal static class DevTools
 
     // Demo data
 
-    const string DemoMarker = ".drivesync-demo";
-
     static async Task<int> BuildDemoAsync(AppServices services, string root)
     {
         if (Directory.Exists(root) && Directory.EnumerateFileSystemEntries(root).Any() && !File.Exists(Path.Combine(root, DemoMarker)))
             throw new InvalidOperationException($"{root} isn't empty and isn't a DriveSync demo folder, so it was left alone.");
-        foreach (string sub in new[] { "pc", "drive" })
+        foreach (string sub in new[] { "pc", "drive", "drive-e", "drive-f", "drive-f-unplugged", "drive-g" })
         {
             string path = Path.Combine(root, sub);
             if (Directory.Exists(path))
@@ -93,19 +93,36 @@ internal static class DevTools
         Write(@"Documents\Scans\Car insurance.pdf", 320);
         Write(@"Documents\Recipes\Lentil soup.md", 3);
         for (int i = 1; i <= 12; i++)
-            Write($@"Documents\Photos 2024\IMG_{i:D4}.jpg", 900 + i * 37);
+            Write($@"Pictures\2024\IMG_{i:D4}.jpg", 900 + i * 37);
+        for (int i = 1; i <= 3; i++)
+            Write($@"Videos\Clip {i}.mp4", 3000 + i * 400);
 
-        Directory.CreateDirectory(Path.Combine(root, "drive"));
-        var profile = BackupSetup.CreateProfile(Path.Combine(root, "drive"), [Path.Combine(pc, "Desktop"), Path.Combine(pc, "Documents")]);
-        services.SaveProfile(profile);
-        using (var session = services.OpenSession())
+        string driveE = Path.Combine(root, "drive-e"), driveF = Path.Combine(root, "drive-f");
+        Directory.CreateDirectory(driveE);
+        Directory.CreateDirectory(driveF);
+        Directory.CreateDirectory(Path.Combine(root, "drive-g"));
+        services.Backups.Clear();
+        services.Save();
+
+        var personal = BackupSetup.CreateProfile(driveE, [Path.Combine(pc, "Desktop"), Path.Combine(pc, "Documents")], "Personal files", services.Backups);
+        services.Add(personal);
+        var copy = BackupSetup.CreateProfile(driveF, [Path.Combine(pc, "Desktop"), Path.Combine(pc, "Documents")], "Personal files (copy 2)", services.Backups);
+        services.Add(copy);
+        var photos = BackupSetup.CreateProfile(driveE, [Path.Combine(pc, "Pictures"), Path.Combine(pc, "Videos")], "Photos archive", services.Backups);
+        services.Add(photos);
+        foreach (var backup in services.Backups)
+        {
+            using var session = services.OpenSession(backup);
             await session.SyncAsync();
+        }
+        using (var session = services.OpenSession(photos))
+            await session.OffloadAsync([Path.Combine(pc, "Videos")]);
 
         // Some files leave the PC by hand: a folder deleted in Explorer, scans moved off somewhere.
         services.RecycleBin.Recycle([Path.Combine(pc, @"Desktop\Old Projects")]);
         foreach (string scan in Directory.GetFiles(Path.Combine(pc, @"Documents\Scans")))
             File.Delete(scan);
-        using (var session = services.OpenSession())
+        using (var session = services.OpenSession(personal))
             await session.SyncAsync();
 
         // Ordinary work since the last sync, for the review screen.
@@ -115,6 +132,9 @@ internal static class DevTools
         Directory.CreateDirectory(Path.Combine(pc, @"Documents\Thesis\Old drafts"));
         File.Move(Path.Combine(pc, @"Documents\Thesis\Draft 2.docx"), Path.Combine(pc, @"Documents\Thesis\Old drafts\Draft 2.docx"));
         File.Delete(Path.Combine(pc, @"Desktop\Notes.txt"));
+
+        // The second copy's drive is "unplugged".
+        Directory.Move(driveF, Path.Combine(root, "drive-f-unplugged"));
         return 0;
     }
 
@@ -122,14 +142,13 @@ internal static class DevTools
 
     static async Task<int> ScreenshotsAsync(AppServices services, string outDir)
     {
-        if (services.LoadProfile() is null)
+        services.Load();
+        if (services.Backups.Count == 0)
             throw new InvalidOperationException("Run --dev-demo first.");
         Directory.CreateDirectory(outDir);
-        string pc = Path.GetDirectoryName(services.Profile!.Sources[0].Path)!;
-        var suggestions = services.Profile.Sources.Select(s => new FolderSuggestion(s.Name, s.Path))
-            .Append(new FolderSuggestion("Pictures", Path.Combine(pc, "Pictures")))
-            .ToList();
-        Directory.CreateDirectory(Path.Combine(pc, "Pictures"));
+        string pc = Path.GetDirectoryName(services.Backups[0].Sources[0].Path)!;
+        string demoRoot = Path.GetDirectoryName(pc)!;
+        var suggestions = new[] { "Desktop", "Documents", "Pictures", "Videos" }.Select(n => new FolderSuggestion(n, Path.Combine(pc, n))).ToList();
 
         foreach (var theme in new[] { ApplicationTheme.Light, ApplicationTheme.Dark })
         {
@@ -140,87 +159,100 @@ internal static class DevTools
             {
                 var wizard = Offscreen(new SetupWindow(wizardModel));
                 wizard.Show();
-                wizardModel.Folders[0].IsSelected = true;
+                wizardModel.Name = "Work projects";
                 wizardModel.Folders[1].IsSelected = true;
+                wizardModel.Folders[2].IsSelected = true;
                 await Settle(1200);
-                await Save(wizard, outDir, $"1-setup-folders-{suffix}");
+                await Save(wizard, outDir, $"01-add-backup-{suffix}");
                 wizardModel.NextCommand.Execute(null);
                 var drive = wizardModel.Drives.FirstOrDefault(d => !d.Kind.StartsWith("This PC", StringComparison.Ordinal)) ?? wizardModel.Drives.FirstOrDefault();
                 if (drive is not null)
                     drive.IsSelected = true;
-                await Save(wizard, outDir, $"2-setup-drive-{suffix}");
-                wizardModel.NextCommand.Execute(null);
-                await Save(wizard, outDir, $"3-setup-policy-{suffix}");
-                wizardModel.NextCommand.Execute(null);
-                await Save(wizard, outDir, $"4-setup-start-{suffix}");
+                await Save(wizard, outDir, $"02-add-backup-drive-{suffix}");
                 wizard.Close();
             }
 
             var main = new MainViewModel(services);
             var window = Offscreen(new MainWindow(main));
             window.Show();
-            await main.Dashboard.RefreshAsync();
-            await Save(window, outDir, $"5-home-{suffix}");
+            await main.Overview.RefreshAsync();
+            await Save(window, outDir, $"03-overview-{suffix}");
 
-            main.Dashboard.ShowSampleProgress();
-            await Save(window, outDir, $"6-home-syncing-{suffix}");
-            main.Dashboard.ClearSampleProgress();
+            var personal = main.Backups.First(p => p.Name == "Personal files");
+            var photos = main.Backups.First(p => p.Name == "Photos archive");
+            photos.Dashboard.ShowSampleProgress();
+            await Save(window, outDir, $"04-overview-syncing-{suffix}");
+            photos.Dashboard.ClearSampleProgress();
 
-            await main.ShowPreviewAsync();
-            await Save(window, outDir, $"7-review-{suffix}");
-            if (main.CurrentPage is PreviewViewModel preview && preview.Categories.Count > 0)
-            {
-                preview.SelectedCategory = preview.Categories[^1];
-                await Save(window, outDir, $"8-review-missing-{suffix}");
-            }
-            main.ShowHome();
+            main.Select(personal);
+            personal.ShowHome();
+            await Settle(600);
+            await Save(window, outDir, $"05-backup-page-{suffix}");
 
-            await main.ShowMissingAsync();
-            if (main.Missing.Groups.Count > 0)
-            {
-                main.Missing.Groups[0].IsExpanded = true;
-                main.Missing.Groups[0].Files[0].IsSelected = true;
-            }
-            await Save(window, outDir, $"9-missing-{suffix}");
-            if (main.Missing.Groups.Count > 0)
-            {
-                main.Missing.Groups[0].DeleteAllCommand.Execute(null);
-                await Save(window, outDir, $"10-missing-confirm-{suffix}");
-                main.Missing.CancelConfirmCommand.Execute(null);
-            }
+            await personal.SyncNowAsync();
+            await Save(window, outDir, $"06-review-{suffix}");
+            personal.ShowHome();
+
+            await personal.ShowMissingAsync();
+            await Save(window, outDir, $"07-missing-{suffix}");
+
+            await personal.EditCommand.ExecuteAsync(null);
+            await Save(window, outDir, $"08-edit-backup-{suffix}");
+            var edit = (EditBackupViewModel)personal.Content;
+            edit.Folders[1].RemoveCommand.Execute(null);
+            await Save(window, outDir, $"09-stop-backing-up-{suffix}");
+            edit.CancelRemoveFolderCommand.Execute(null);
+            edit.OpenMoveCommand.Execute(null);
+            await Save(window, outDir, $"10-move-{suffix}");
+            edit.CancelMoveCommand.Execute(null);
+            edit.AskRemoveBackupCommand.Execute(null);
+            await Save(window, outDir, $"11-remove-backup-{suffix}");
+            edit.ConfirmNoCommand.Execute(null);
+            personal.ShowHome();
             window.Close();
         }
 
-        // Act on the demo through the same commands the buttons use, then show the outcome.
+        // Run the real flows on the demo data, through the same commands the buttons use.
         ApplicationThemeManager.Apply(ApplicationTheme.Light, WindowBackdropType.None, true);
         var app = new MainViewModel(services);
         var appWindow = Offscreen(new MainWindow(app));
         appWindow.Show();
-        await app.ShowMissingAsync();
-        var scans = app.Missing.Groups.First(g => g.Folder.EndsWith("Scans", StringComparison.Ordinal));
-        scans.KeepAllCommand.Execute(null);
-        await WaitUntil(() => !app.Missing.IsBusy);
-        var oldProjects = app.Missing.Groups.First(g => g.Folder.EndsWith("Old Projects", StringComparison.Ordinal));
-        oldProjects.DeleteAllCommand.Execute(null);
-        await app.Missing.ConfirmDeleteCommand.ExecuteAsync(null);
-        await Save(appWindow, outDir, "11-missing-after-decisions-light");
+        await app.Overview.RefreshAsync();
 
-        await app.ShowPreviewAsync();
-        ((PreviewViewModel)app.CurrentPage).ApplyCommand.Execute(null);
-        await WaitUntil(() => !app.Dashboard.IsSyncing, seconds: 60);
-        await Save(appWindow, outDir, "12-home-after-sync-light");
+        var work = app.Backups.First(p => p.Name == "Personal files");
+        app.Select(work);
+        await work.EditCommand.ExecuteAsync(null);
+        var editor = (EditBackupViewModel)work.Content;
+        editor.Folders.First(f => f.Name == "Documents").RemoveCommand.Execute(null);
+        await editor.ConfirmRemoveFolderCommand.ExecuteAsync(null);
+        await Save(appWindow, outDir, "12-after-stop-backing-up-light");
+        editor.RemovedFolders.First().AddBackCommand.Execute(null);
+
+        var archive = app.Backups.First(p => p.Name == "Photos archive");
+        app.Select(archive);
+        await archive.EditCommand.ExecuteAsync(null);
+        var mover = (EditBackupViewModel)archive.Content;
+        mover.PickFolder = () => Path.Combine(demoRoot, "drive-g");
+        mover.OpenMoveCommand.Execute(null);
+        mover.ChooseMoveFolderCommand.Execute(null);
+        await mover.StartMoveCommand.ExecuteAsync(null);
+        await Save(appWindow, outDir, "13-after-move-light");
+
+        app.ShowOverview();
+        await app.SyncAllCommand.ExecuteAsync(null);
+        await app.Overview.RefreshAsync();
+        await Save(appWindow, outDir, "14-overview-after-sync-all-light");
+
+        var copy = app.Backups.First(p => p.Name == "Personal files (copy 2)");
+        app.Select(copy);
+        await copy.EditCommand.ExecuteAsync(null);
+        var remover = (EditBackupViewModel)copy.Content;
+        remover.AskRemoveBackupCommand.Execute(null);
+        await remover.ConfirmYesCommand.ExecuteAsync(null);
+        await app.Overview.RefreshAsync();
+        await Save(appWindow, outDir, "15-overview-after-remove-light");
         appWindow.Close();
         return 0;
-    }
-
-    static async Task WaitUntil(Func<bool> done, int seconds = 15)
-    {
-        var giveUp = DateTime.UtcNow.AddSeconds(seconds);
-        await Task.Delay(200);
-        while (!done() && DateTime.UtcNow < giveUp)
-            await Task.Delay(100);
-        if (!done())
-            throw new TimeoutException("The demo action didn't finish in time.");
     }
 
     static T Offscreen<T>(T window) where T : FluentWindow

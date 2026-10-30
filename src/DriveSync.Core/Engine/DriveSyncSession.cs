@@ -19,6 +19,7 @@ public sealed partial class DriveSyncSession : IDisposable
     readonly string? _mirrorDirectory;
     readonly ExclusionMatcher _exclusions;
     readonly Dictionary<string, SourceFolder> _sources;
+    readonly OffloadList? _offloadList;
 
     public BackupProfile Profile { get; }
 
@@ -26,7 +27,7 @@ public sealed partial class DriveSyncSession : IDisposable
 
     public Catalog Catalog { get; }
 
-    DriveSyncSession(BackupProfile profile, BackupLocation location, Catalog catalog, IRecycleBin bin, RunLock runLock, string? mirrorDirectory)
+    DriveSyncSession(BackupProfile profile, BackupLocation location, Catalog catalog, IRecycleBin bin, RunLock runLock, string? mirrorDirectory, string? offloadListPath)
     {
         Profile = profile;
         Location = location;
@@ -34,6 +35,7 @@ public sealed partial class DriveSyncSession : IDisposable
         _bin = bin;
         _lock = runLock;
         _mirrorDirectory = mirrorDirectory;
+        _offloadList = offloadListPath is null ? null : new OffloadList(offloadListPath);
         _exclusions = new ExclusionMatcher(profile.Exclusions);
         _sources = profile.Sources.ToDictionary(s => s.Name, KeyPath.Comparer);
     }
@@ -41,8 +43,9 @@ public sealed partial class DriveSyncSession : IDisposable
     /// <summary>
     /// Finds the profile's backup drive and opens it. <paramref name="mirrorDirectory"/> receives a copy of the
     /// catalog when the session closes, so the record survives even if the drive fails.
+    /// <paramref name="offloadListPath"/> is the list of offloaded files shared by every backup on this PC.
     /// </summary>
-    public static DriveSyncSession Open(BackupProfile profile, IRecycleBin recycleBin, string? mirrorDirectory = null)
+    public static DriveSyncSession Open(BackupProfile profile, IRecycleBin recycleBin, string? mirrorDirectory = null, string? offloadListPath = null)
     {
         var location = BackupLocation.Find(profile)
             ?? throw new DriveSyncException("The backup drive isn't connected. Plug in the drive you set up for DriveSync, then try again.");
@@ -50,7 +53,7 @@ public sealed partial class DriveSyncSession : IDisposable
         var runLock = RunLock.Acquire(location.LockPath);
         try
         {
-            return new DriveSyncSession(profile, location, Catalog.Open(location.CatalogPath), recycleBin, runLock, mirrorDirectory);
+            return new DriveSyncSession(profile, location, Catalog.Open(location.CatalogPath), recycleBin, runLock, mirrorDirectory, offloadListPath);
         }
         catch
         {

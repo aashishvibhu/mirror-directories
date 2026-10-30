@@ -57,6 +57,14 @@ public sealed partial class DriveSyncSession
 
         DetectMoves(plan, missing, report, ct);
 
+        // Offloaded through another backup that also holds these files: not deleted, so keep them here too.
+        if (_offloadList is not null && missing.Count > 0)
+        {
+            var offloaded = _offloadList.Matching(missing.Select(r => (SourcePathFor(r.Key), r.Hash)));
+            plan.OffloadedElsewhere.AddRange(missing.Where(r => offloaded.Contains(SourcePathFor(r.Key))));
+            missing.RemoveAll(r => offloaded.Contains(SourcePathFor(r.Key)));
+        }
+
         var recycleBin = missing.Count > 0 ? PcRecycleBin() : null;
         foreach (var record in missing)
             plan.Missing.Add(new MissingFile(record, recycleBin?.Find(SourcePathFor(record.Key)) is not null));
@@ -123,6 +131,11 @@ public sealed partial class DriveSyncSession
             {
                 SetState(record, FileState.Active, "back-on-pc");
                 result.BackOnPc++;
+            }
+            foreach (var record in plan.OffloadedElsewhere)
+            {
+                SetState(record, FileState.Archived, "kept-on-backup", "offloaded through another backup");
+                result.KeptOnBackup++;
             }
 
             var copies = new List<ScannedFile>(plan.NewFiles.Concat(plan.ChangedFiles));

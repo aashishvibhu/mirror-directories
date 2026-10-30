@@ -50,6 +50,7 @@ public sealed partial class DriveSyncSession
             {
                 report.Report(new SyncProgress("Moving to the Recycle Bin", 0, verified.Count, 0, 0, null), force: true);
                 var outcomes = _bin.Recycle([.. verified.Select(v => v.File.FullPath)]);
+                var offloaded = new List<(string, string, long)>();
                 foreach (var (file, record) in verified)
                 {
                     var outcome = outcomes[file.FullPath];
@@ -58,12 +59,15 @@ public sealed partial class DriveSyncSession
                         SetState(record, FileState.Archived, "offloaded");
                         result.Offloaded++;
                         result.BytesMovedToRecycleBin += file.Size;
+                        offloaded.Add((file.FullPath, record.Hash, file.Size));
                     }
                     else
                     {
                         result.Problems.Add(new Problem(file.Key, Explain(outcome, onBackupDrive: false)));
                     }
                 }
+                if (offloaded.Count > 0)
+                    _offloadList?.Add(offloaded);
             }
         }
 
