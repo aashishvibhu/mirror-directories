@@ -131,6 +131,22 @@ public sealed class SourceScanner(ExclusionMatcher exclusions, bool skipCloudOnl
             into.BlindSpots.Add(key);
             return;
         }
-        into.Files[key] = new ScannedFile(key, file.FullName, file.Length, file.LastWriteTimeUtc.Ticks);
+        long size = file.Length;
+        if (file.Attributes.HasFlag(FileAttributes.ReparsePoint) && file.LinkTarget is not null)
+        {
+            // A file link reports no size of its own. What gets copied is the file it points to, so use that size.
+            try
+            {
+                if (file.ResolveLinkTarget(returnFinalTarget: true) is FileInfo { Exists: true } target)
+                    size = target.Length;
+            }
+            catch (IOException)
+            {
+                into.LinksSkipped++;
+                into.BlindSpots.Add(key);
+                return;
+            }
+        }
+        into.Files[key] = new ScannedFile(key, file.FullName, size, file.LastWriteTimeUtc.Ticks);
     }
 }

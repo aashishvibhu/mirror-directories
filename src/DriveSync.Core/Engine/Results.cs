@@ -73,6 +73,12 @@ public sealed class SyncResult
 
     public bool MassDisappearance { get; set; }
 
+    /// <summary>Of the removed copies, those that went to the backup's trash folder because the Recycle Bin couldn't take them.</summary>
+    public int SentToTrashFolder { get; set; }
+
+    /// <summary>Backup copies found missing or the wrong size by the quick check at the end of the sync.</summary>
+    public int HealthIssues { get; set; }
+
     public List<Problem> Problems { get; } = [];
 
     public List<string> Warnings { get; } = [];
@@ -83,6 +89,9 @@ public sealed class SyncResult
 public sealed class DecisionResult
 {
     public int Applied { get; set; }
+
+    /// <summary>Items that went to the backup's trash folder because the Recycle Bin couldn't take them.</summary>
+    public int SentToTrashFolder { get; set; }
 
     public List<Problem> Problems { get; } = [];
 }
@@ -106,6 +115,8 @@ public sealed class DeleteResult
 {
     public int Deleted { get; set; }
 
+    public int SentToTrashFolder { get; set; }
+
     public List<Problem> Problems { get; } = [];
 }
 
@@ -128,9 +139,28 @@ public sealed record RestoreRequest(IReadOnlyList<string> Paths)
     public string? TargetFolder { get; init; }
 }
 
+/// <summary>What a restore would do, worked out before anything is written.</summary>
+public sealed class RestorePlan
+{
+    /// <summary>Files that would be copied back, including those in <see cref="InTheWay"/>.</summary>
+    public int ToRestore { get; set; }
+
+    public long Bytes { get; set; }
+
+    /// <summary>Files already on the PC, identical to the backup copy.</summary>
+    public int AlreadyThere { get; set; }
+
+    /// <summary>Files where a different file is in the way; it would be renamed, not replaced.</summary>
+    public int InTheWay { get; set; }
+
+    public int MissingOnBackup { get; set; }
+}
+
 public sealed class RestoreResult
 {
     public int Restored { get; set; }
+
+    public long BytesRestored { get; set; }
 
     public int AlreadyThere { get; set; }
 
@@ -151,6 +181,29 @@ public sealed record MoveResult(bool Switched, string NewRoot, string NewDriveId
 public sealed record VersionEntry(string Stamp, string Key, long Size, DateTime ModifiedUtc, string Path);
 
 public sealed record DeletedEntry(string Key, long Size, DateTime DeletedUtc, bool InRecycleBin, string DataPath);
+
+public sealed record VersionHog(string Key, int Versions, long Bytes);
+
+/// <summary>How much space old versions take, and the files responsible for most of it.</summary>
+public sealed record VersionUsage(int Count, long Bytes, IReadOnlyList<VersionHog> Biggest);
+
+/// <summary>What takes the space on the backup drive. Free and total are null when the drive doesn't report them.</summary>
+public sealed record StorageUsage(long Current, long Offloaded, long OldVersions, long TrashFolder, long? Free, long? Total);
+
+/// <summary>Outcome of one run of the rolling checksum check.</summary>
+public sealed record VerifyResult(int Checked, long Bytes, int Failed);
+
+/// <summary>The state of a backup's copies as far as the checks so far can tell.</summary>
+public sealed record HealthStatus(
+    DateTime? LastQuickCheckUtc,
+    DateTime? LastFullCheckUtc,
+    int Files,
+    int VerifiedLast30Days,
+    int MissingOrWrongSize,
+    IReadOnlyList<FileRecord> FailedChecksum)
+{
+    public int Issues => MissingOrWrongSize + FailedChecksum.Count;
+}
 
 public enum HealthProblem
 {
@@ -197,6 +250,8 @@ public sealed record BackupSummary(
     long? DriveTotalBytes,
     string BackupRoot)
 {
+    /// <summary>Backup copies known to be missing, the wrong size or failing their checksum.</summary>
+    public int HealthIssues { get; init; }
     public int Count(FileState state) => Totals.FirstOrDefault(t => t.State == state)?.Files ?? 0;
 
     public long Bytes(FileState state) => Totals.FirstOrDefault(t => t.State == state)?.Bytes ?? 0;

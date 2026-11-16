@@ -4,6 +4,22 @@ using DriveSync.Core.Storage;
 
 namespace DriveSync.Core;
 
+/// <summary>One of the folders inside a backup found on a drive. <see cref="OriginalPath"/> is empty when the drive doesn't say.</summary>
+public sealed record FoundFolder(string Name, string OriginalPath, int Files, long Bytes);
+
+/// <summary>A DriveSync backup on a drive that the app on this PC doesn't know.</summary>
+public sealed record FoundBackup(string Root, string DriveId, BackupManifest? Manifest, IReadOnlyList<FoundFolder> Folders, DateTime? LastSyncUtc)
+{
+    public string Name => Manifest is { Name.Length: > 0 } ? Manifest.Name : "My backup";
+
+    public long Bytes => Folders.Sum(f => f.Bytes);
+
+    public int Files => Folders.Sum(f => f.Files);
+
+    /// <summary>True when the backup was last used from a different PC.</summary>
+    public bool FromAnotherPc => Manifest is { PcName.Length: > 0 } && !Manifest.PcName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+}
+
 /// <summary>Creates new backups from the folders and drive the user picked, and checks folder changes against every backup.</summary>
 public static class BackupSetup
 {
@@ -55,6 +71,114 @@ public static class BackupSetup
             LastKnownRoot = location.Root,
             Sources = sources,
         };
+    }
+
+    /// <summary>
+    /// DriveSync backups in <paramref name="place"/> (a drive or folder) that the app doesn't know yet: made on another PC,
+    /// or removed from the app earlier.
+    /// </summary>
+    public static IReadOnlyList<FoundBackup> FindBackups(string place, IReadOnlyList<BackupProfile> known)
+    {
+        var found = new List<FoundBackup>();
+        IEnumerable<string> folders;
+        try
+        {
+            folders = [.. Directory.EnumerateDirectories(place)];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return found;
+        }
+        foreach (string root in folders)
+        {
+            if (BackupLocation.ReadDriveId(root) is not { Length: > 0 } id || known.Any(b => b.DriveId.Equals(id, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (File.Exists(Path.Combine(root, BackupLocation.MetaFolderName, "moving")))
+                continue; // an unfinished copy from "Move to another drive"
+
+            var manifest = BackupManifest.TryRead(root);
+            var totals = new Dictionary<string, (int Files, long Bytes)>(KeyPath.Comparer);
+            DateTime? lastSync = null;
+            try
+            {
+                if (BackupLocation.HasCatalog(root))
+                {
+                    using var catalog = Catalog.OpenReadOnly(Path.Combine(root, BackupLocation.MetaFolderName, "catalog.db"));
+                    totals = catalog.TotalsByFolder();
+                    if (DateTime.TryParse(catalog.GetMeta("last_sync_utc"), System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.RoundtripKind, out var t))
+                        lastSync = t;
+                }
+            }
+            catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or IOException)
+            {
+            }
+
+            var folderList = new List<FoundFolder>();
+            foreach (var source in manifest?.Sources ?? [])
+                folderList.Add(new FoundFolder(source.Name, source.Path, totals.GetValueOrDefault(source.Name).Files, totals.GetValueOrDefault(source.Name).Bytes));
+            var removed = (manifest?.RemovedFolders ?? []).Select(r => r.Name).ToHashSet(KeyPath.Comparer);
+            foreach (var (name, total) in totals)
+            {
+                if (!removed.Contains(name) && !folderList.Any(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                    folderList.Add(new FoundFolder(name, "", total.Files, total.Bytes));
+            }
+            found.Add(new FoundBackup(Path.TrimEndingDirectorySeparator(root), id, manifest, folderList, lastSync));
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Starts using a backup found on a drive. Each of its folders keeps its name on the drive, so nothing is copied again;
+    /// <paramref name="folderPaths"/> says where each one lives on this PC. Folders left out stay on the drive as removed folders.
+    /// </summary>
+    public static BackupProfile Adopt(FoundBackup found, string name, IReadOnlyDictionary<string, string> folderPaths, IReadOnlyList<BackupProfile> existing)
+    {
+        name = string.IsNullOrWhiteSpace(name) ? "My backup" : name.Trim();
+        if (existing.Any(b => b.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            throw new DriveSyncException($"You already have a backup called \"{name}\". Pick another name.");
+        if (existing.FirstOrDefault(b => b.DriveId.Equals(found.DriveId, StringComparison.OrdinalIgnoreCase)) is { } same)
+            throw new DriveSyncException($"That backup is already in DriveSync as \"{same.Name}\".");
+
+        var sources = new List<SourceFolder>();
+        var removed = new List<RemovedFolder>(found.Manifest?.RemovedFolders ?? []);
+        foreach (var folder in found.Folders)
+        {
+            if (folderPaths.TryGetValue(folder.Name, out string? chosen) && !string.IsNullOrWhiteSpace(chosen))
+            {
+                string path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(chosen));
+                if (sources.Any(s => s.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
+                    throw new DriveSyncException($"{path} is chosen for two folders. Each folder on the backup needs its own folder on this PC.");
+                Directory.CreateDirectory(path); // a new PC may not have the folder yet
+                CheckFolder(path, found.Root, existing);
+                sources.Add(new SourceFolder(folder.Name, path));
+            }
+            else if (!removed.Any(r => r.Name.Equals(folder.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                removed.Add(new RemovedFolder(folder.Name, folder.OriginalPath, DateTime.UtcNow));
+            }
+        }
+        if (sources.Count == 0)
+            throw new DriveSyncException("Pick a folder on this PC for at least one of the backup's folders.");
+        CheckDestination(found.Root, existing, except: null);
+
+        var profile = new BackupProfile
+        {
+            Name = name,
+            DriveId = found.DriveId,
+            BackupFolderName = Path.GetFileName(found.Root),
+            LastKnownRoot = found.Root,
+            Sources = sources,
+            RemovedFolders = removed,
+        };
+        if (found.Manifest is { } manifest)
+        {
+            if (manifest.Exclusions.Count > 0)
+                profile.Exclusions = [.. manifest.Exclusions];
+            profile.MissingFilePolicy = manifest.MissingFilePolicy;
+            profile.RemovedFilesGoTo = manifest.RemovedFilesGoTo;
+        }
+        return profile;
     }
 
     /// <summary>

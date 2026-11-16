@@ -175,6 +175,7 @@ public sealed partial class DriveSyncSession
             }
 
             ApplyMissingPolicy(plan, result, stamp);
+            result.HealthIssues = QuickCheck(ct);
             Catalog.SetMeta("last_sync_utc", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             Catalog.SetMeta("last_sync_problems", result.Problems.Count.ToString(CultureInfo.InvariantCulture));
             Catalog.Log("sync", null, Describe(result));
@@ -247,10 +248,12 @@ public sealed partial class DriveSyncSession
         string temp = destination + FsUtil.TempSuffix;
         var record = Catalog.Get(file.Key);
         string hash;
+        long copiedBytes;
         try
         {
             FsUtil.EnsureParent(destination);
             hash = await FileHasher.CopyWithHashAsync(file.FullPath, temp, onBytes, ct);
+            copiedBytes = new FileInfo(temp).Length;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
@@ -274,7 +277,7 @@ public sealed partial class DriveSyncSession
                 }
                 else
                 {
-                    MoveToVersions(destination, file.Key, stamp);
+                    MoveToVersions(destination, file.Key, stamp, existingHash);
                 }
             }
             File.Move(temp, destination, overwrite: true);
@@ -287,7 +290,9 @@ public sealed partial class DriveSyncSession
         }
 
         record ??= new FileRecord { Key = file.Key };
-        record.Size = file.Size;
+        // The size is what was actually copied, which differs from the scan if the file changed in between.
+        // The time stays the scanned one, so the next sync still sees the newer file and copies it again.
+        record.Size = copiedBytes;
         record.ModifiedUtcTicks = file.ModifiedUtcTicks;
         record.Hash = hash;
         SetState(record, FileState.Active, outcome.ToString().ToLowerInvariant());
@@ -324,7 +329,9 @@ public sealed partial class DriveSyncSession
         }
 
         var byKey = toRemove.ToDictionary(r => r.Key, KeyPath.Comparer);
-        foreach (var (key, problem) in RemoveFromBackup(toRemove, stamp))
+        var removed = RemoveFromBackup(toRemove, stamp, out int fellBack);
+        result.SentToTrashFolder += fellBack;
+        foreach (var (key, problem) in removed)
         {
             var record = byKey[key];
             if (problem is null)
@@ -340,6 +347,21 @@ public sealed partial class DriveSyncSession
                 result.Problems.Add(new Problem(key, problem));
             }
         }
+    }
+
+    /// <summary>
+    /// For a backup that has just been connected to a PC that doesn't have its files: every backed-up file that isn't
+    /// on this PC is kept on the backup and marked as offloaded, instead of being asked about one by one.
+    /// </summary>
+    public async Task<int> KeepMissingOnBackupAsync(CancellationToken ct = default)
+    {
+        var plan = await PlanSyncAsync(null, ct);
+        using (Catalog.Batch())
+        {
+            foreach (var missing in plan.Missing)
+                SetState(missing.Record, FileState.Archived, "kept-on-backup", "not on this PC");
+        }
+        return plan.Missing.Count;
     }
 
     /// <summary>Files waiting for a decision, with a hint when the PC's Recycle Bin holds them.</summary>
@@ -390,7 +412,9 @@ public sealed partial class DriveSyncSession
                     break;
                 case MissingDecision.DeletedOnPurpose:
                     var byKey = records.ToDictionary(r => r.Key, KeyPath.Comparer);
-                    foreach (var (key, problem) in RemoveFromBackup(records, NewStamp()))
+                    var removed = RemoveFromBackup(records, NewStamp(), out int fellBack);
+                    result.SentToTrashFolder = fellBack;
+                    foreach (var (key, problem) in removed)
                     {
                         var record = byKey[key];
                         if (problem is null)

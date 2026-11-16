@@ -19,29 +19,12 @@ public sealed partial class DriveSyncSession
             throw new DriveSyncException($"{folderName} is still backed up. Remove it from the backup first.");
         var result = new DecisionResult();
         string path = Location.PathFor(folderName);
-        if (Directory.Exists(path))
+        if (SendAway([new Removal(folderName, path, folderName)], NewStamp(), out int fellBack)[folderName] is { } problem)
         {
-            var outcome = _bin.IsSupported(Location.Root) ? _bin.Recycle([path])[path] : RecycleOutcome.NotSupported;
-            if (outcome == RecycleOutcome.NotSupported)
-            {
-                try
-                {
-                    string destination = FsUtil.UniquePath(Path.Combine(Location.TrashDir, NewStamp(), folderName));
-                    FsUtil.EnsureParent(destination);
-                    Directory.Move(path, destination);
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                    result.Problems.Add(new Problem(folderName, $"Couldn't move the folder to the drive's trash folder: {e.Message}"));
-                    return result;
-                }
-            }
-            else if (outcome != RecycleOutcome.Recycled)
-            {
-                result.Problems.Add(new Problem(folderName, Explain(outcome, onBackupDrive: true)));
-                return result;
-            }
+            result.Problems.Add(new Problem(folderName, problem));
+            return result;
         }
+        result.SentToTrashFolder = fellBack;
 
         using (Catalog.Batch())
         {

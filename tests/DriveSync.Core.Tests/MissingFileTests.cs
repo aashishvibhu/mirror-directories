@@ -225,7 +225,7 @@ public class MissingFileTests
     }
 
     [Fact]
-    public async Task Full_recycle_bin_leaves_the_backup_copy_in_place()
+    public async Task A_full_recycle_bin_sends_the_backup_copy_to_the_trash_folder_instead()
     {
         using var env = new TestEnv();
         env.Write(@"Desktop\x.txt", "some content");
@@ -237,10 +237,32 @@ public class MissingFileTests
         using var session = env.Open();
         var result = session.ResolveMissing([@"Desktop\x.txt"], MissingDecision.DeletedOnPurpose);
 
-        Assert.Equal(0, result.Applied);
-        Assert.Contains("bigger than the Recycle Bin", Assert.Single(result.Problems).Message);
-        Assert.True(File.Exists(env.BackupPath(@"Desktop\x.txt")));
-        Assert.Equal(FileState.Pending, session.Catalog.Get(@"Desktop\x.txt")!.State);
+        Assert.Equal(1, result.Applied);
+        Assert.Equal(1, result.SentToTrashFolder);
+        Assert.Empty(result.Problems);
+        Assert.False(File.Exists(env.BackupPath(@"Desktop\x.txt")));
+        Assert.Single(Directory.GetFiles(Path.Combine(env.BackupRoot, ".drivesync", "trash"), "x.txt", SearchOption.AllDirectories));
+        Assert.Equal(FileState.Deleted, session.Catalog.Get(@"Desktop\x.txt")!.State);
+        Assert.Single(session.ListDeleted()); // still restorable
+    }
+
+    [Fact]
+    public async Task A_backup_set_to_use_its_trash_folder_never_uses_the_recycle_bin()
+    {
+        using var env = new TestEnv();
+        env.Profile.RemovedFilesGoTo = RemovedFilesGoTo.TrashFolder;
+        env.Write(@"Desktop\x.txt", "some content");
+        await env.SyncAsync();
+        File.Delete(env.PcPath(@"Desktop\x.txt"));
+        await env.SyncAsync();
+
+        using var session = env.Open();
+        var result = session.ResolveMissing([@"Desktop\x.txt"], MissingDecision.DeletedOnPurpose);
+
+        Assert.Equal(1, result.Applied);
+        Assert.Equal(0, result.SentToTrashFolder); // not a fallback: it's where this backup's removed files go
+        Assert.Empty(env.Bin.Items);
+        Assert.False(Assert.Single(session.ListDeleted()).InRecycleBin);
     }
 
     [Fact]

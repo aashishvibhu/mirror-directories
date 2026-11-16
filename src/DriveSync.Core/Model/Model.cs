@@ -25,6 +25,16 @@ public enum MissingFilePolicy
     AlwaysRemove,
 }
 
+/// <summary>Where copies removed from the backup go. Neither choice erases anything.</summary>
+public enum RemovedFilesGoTo
+{
+    /// <summary>The backup drive's Recycle Bin; the backup's own trash folder when the bin has no room or doesn't exist.</summary>
+    RecycleBinThenTrashFolder,
+
+    /// <summary>Always the backup's own trash folder (<c>.drivesync\trash</c>): no size limit, and the same on every PC.</summary>
+    TrashFolder,
+}
+
 /// <summary>The user's answer for a file that is missing from the PC.</summary>
 public enum MissingDecision
 {
@@ -99,4 +109,11 @@ public sealed class BackupProfile
 
     /// <summary>Skip OneDrive files that exist only in the cloud, so reading them doesn't download them.</summary>
     public bool SkipCloudOnlyFiles { get; set; } = true;
+
+    public RemovedFilesGoTo RemovedFilesGoTo { get; set; } = RemovedFilesGoTo.RecycleBinThenTrashFolder;
+
+    /// <summary>After each sync, checksum the backup copies that were checked longest ago, for a few minutes.</summary>
+    public bool RollingCheck { get; set; } = true;
+
+    public int RollingCheckMinutes { get; set; } = 5;
 }

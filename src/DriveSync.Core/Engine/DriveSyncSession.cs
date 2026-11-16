@@ -53,7 +53,19 @@ public sealed partial class DriveSyncSession : IDisposable
         var runLock = RunLock.Acquire(location.LockPath);
         try
         {
-            return new DriveSyncSession(profile, location, Catalog.Open(location.CatalogPath), recycleBin, runLock, mirrorDirectory, offloadListPath);
+            var session = new DriveSyncSession(profile, location, Catalog.Open(location.CatalogPath), recycleBin, runLock, mirrorDirectory, offloadListPath);
+            try
+            {
+                // A backup made before old versions were listed in the catalog gets its list built once.
+                if (session.Catalog.GetMeta("versions_indexed") is null)
+                    session.ReindexVersions();
+                return session;
+            }
+            catch
+            {
+                session.Catalog.Dispose();
+                throw;
+            }
         }
         catch
         {
@@ -64,6 +76,8 @@ public sealed partial class DriveSyncSession : IDisposable
 
     public void Dispose()
     {
+        // The drive carries its own settings, so it can be used from another PC.
+        BackupManifest.TryWrite(Location.Root, Profile);
         if (_mirrorDirectory is not null)
         {
             try
@@ -100,10 +114,17 @@ public sealed partial class DriveSyncSession : IDisposable
         }
 
         string key = path.Trim('\\');
-        if (_sources.ContainsKey(KeyPath.SourceName(key)))
+        if (_sources.ContainsKey(KeyPath.SourceName(key)) || RemovedFolderFor(key) is not null)
             return key;
         throw new DriveSyncException($"{path} isn't in a folder DriveSync backs up.");
     }
+
+    /// <summary>The folder that was taken out of this backup and still has <paramref name="key"/> on the drive, if any.</summary>
+    RemovedFolder? RemovedFolderFor(string key) =>
+        Profile.RemovedFolders.FirstOrDefault(r => r.Name.Equals(KeyPath.SourceName(key), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>True when the key's folder is one this backup still copies.</summary>
+    public bool IsBackedUp(string key) => _sources.ContainsKey(KeyPath.SourceName(key));
 
     /// <summary>Where a key lives on the PC.</summary>
     public string SourcePathFor(string key)
@@ -141,7 +162,10 @@ public sealed partial class DriveSyncSession : IDisposable
             {
             }
         }
-        return new BackupSummary(catalog.Totals(), lastSync, lastProblems, free, total, backupRoot);
+        int health = int.TryParse(catalog.GetMeta("quick_check_issues"), CultureInfo.InvariantCulture, out int q) ? q : 0;
+        if (catalog.HasVersion2)
+            health += catalog.VerifiedStats(DateTime.UtcNow).Failed;
+        return new BackupSummary(catalog.Totals(), lastSync, lastProblems, free, total, backupRoot) { HealthIssues = health };
     }
 
     static bool TryRelative(string full, string folder, out string relative)
@@ -167,48 +191,59 @@ public sealed partial class DriveSyncSession : IDisposable
         Catalog.Log(action, record.Key, detail);
     }
 
-    /// <summary>Moves a backup copy into <c>versions\&lt;stamp&gt;\&lt;key&gt;</c>, where it's kept forever.</summary>
-    string MoveToVersions(string backupPath, string key, string stamp)
+    /// <summary>Moves a backup copy into <c>versions\&lt;stamp&gt;\&lt;key&gt;</c>, where it's kept until the user removes it.</summary>
+    string MoveToVersions(string backupPath, string key, string stamp, string hash = "")
     {
         string destination = FsUtil.UniquePath(Path.Combine(Location.VersionsDir, stamp, key));
+        var info = new FileInfo(backupPath);
+        long size = info.Length, modified = info.LastWriteTimeUtc.Ticks;
         FsUtil.MoveFile(backupPath, destination);
+        Catalog.AddVersion(new VersionRow(Path.GetRelativePath(Location.VersionsDir, destination), key, stamp, size, modified, hash));
         return destination;
     }
 
+    /// <summary>Something to take out of the backup: a file or folder, and where it would sit inside the trash folder.</summary>
+    sealed record Removal(string Id, string Path, string TrashRelative);
+
     /// <summary>
-    /// Removes backup copies: to the drive's Recycle Bin, or to <c>.drivesync\trash</c> when the drive has none.
-    /// Returns, for each key, null when it's gone from the backup or the reason it couldn't be removed.
+    /// The only way anything leaves the backup. Items go to the drive's Recycle Bin, or to <c>.drivesync\trash</c>
+    /// when this backup always uses its trash folder, the drive has no bin, or the bin has no room. Nothing is erased.
+    /// Returns, for each id, null when it's gone from the backup or the reason it couldn't be removed.
+    /// <paramref name="fellBack"/> counts items meant for the Recycle Bin that went to the trash folder instead.
     /// </summary>
-    Dictionary<string, string?> RemoveFromBackup(IReadOnlyList<FileRecord> records, string stamp)
+    Dictionary<string, string?> SendAway(IReadOnlyList<Removal> items, string stamp, out int fellBack)
     {
-        var outcome = new Dictionary<string, string?>(KeyPath.Comparer);
-        var present = new List<FileRecord>();
-        foreach (var record in records)
+        fellBack = 0;
+        var outcome = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var present = new List<Removal>();
+        foreach (var item in items)
         {
-            if (File.Exists(Location.PathFor(record.Key)))
-                present.Add(record);
+            if (FsUtil.Exists(item.Path))
+                present.Add(item);
             else
-                outcome[record.Key] = null;
+                outcome[item.Id] = null;
         }
         if (present.Count == 0)
             return outcome;
 
-        var toTrashFolder = new List<FileRecord>();
-        if (_bin.IsSupported(Location.Root))
+        var toTrashFolder = new List<Removal>();
+        bool useBin = Profile.RemovedFilesGoTo == RemovedFilesGoTo.RecycleBinThenTrashFolder && _bin.IsSupported(Location.Root);
+        if (useBin)
         {
-            var recycled = _bin.Recycle([.. present.Select(r => Location.PathFor(r.Key))]);
-            foreach (var record in present)
+            var recycled = _bin.Recycle([.. present.Select(r => r.Path)]);
+            foreach (var item in present)
             {
-                switch (recycled[Location.PathFor(record.Key)])
+                switch (recycled[item.Path])
                 {
                     case RecycleOutcome.Recycled:
-                        outcome[record.Key] = null;
+                        outcome[item.Id] = null;
                         break;
-                    case RecycleOutcome.NotSupported:
-                        toTrashFolder.Add(record); // e.g. a path too long for the Recycle Bin
+                    case RecycleOutcome.NotSupported or RecycleOutcome.BinFull or RecycleOutcome.TooLarge:
+                        // No room, too big, or a path too long for the bin: the trash folder takes it instead.
+                        toTrashFolder.Add(item);
                         break;
                     case var other:
-                        outcome[record.Key] = Explain(other, onBackupDrive: true);
+                        outcome[item.Id] = Explain(other, onBackupDrive: true);
                         break;
                 }
             }
@@ -218,27 +253,48 @@ public sealed partial class DriveSyncSession : IDisposable
             toTrashFolder.AddRange(present);
         }
 
-        foreach (var record in toTrashFolder)
+        foreach (var item in toTrashFolder)
         {
             try
             {
-                string destination = FsUtil.UniquePath(Path.Combine(Location.TrashDir, stamp, record.Key));
-                FsUtil.MoveFile(Location.PathFor(record.Key), destination);
-                outcome[record.Key] = null;
+                string destination = FsUtil.UniquePath(Path.Combine(Location.TrashDir, stamp, item.TrashRelative));
+                if (Directory.Exists(item.Path))
+                {
+                    FsUtil.EnsureParent(destination);
+                    Directory.Move(item.Path, destination);
+                }
+                else
+                {
+                    FsUtil.MoveFile(item.Path, destination);
+                }
+                outcome[item.Id] = null;
+                if (useBin)
+                    fellBack++;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                outcome[record.Key] = $"Couldn't move the backup copy to the drive's trash folder: {e.Message}";
+                outcome[item.Id] = $"Couldn't move this to the backup's trash folder: {e.Message}";
             }
         }
+        return outcome;
+    }
 
-        foreach (var record in present)
+    /// <summary>Removes backup copies of files. See <see cref="SendAway"/>.</summary>
+    Dictionary<string, string?> RemoveFromBackup(IReadOnlyList<FileRecord> records, string stamp, out int fellBack)
+    {
+        var outcome = SendAway([.. records.Select(r => new Removal(r.Key, Location.PathFor(r.Key), r.Key))], stamp, out fellBack);
+        foreach (var record in records)
         {
             if (outcome[record.Key] is null)
                 FsUtil.RemoveEmptyFoldersUpTo(Path.GetDirectoryName(Location.PathFor(record.Key)), Location.Root);
         }
         return outcome;
     }
+
+    /// <summary>Where this backup's removed copies go, in words for a message.</summary>
+    public string RemovedPlace => Profile.RemovedFilesGoTo == RemovedFilesGoTo.TrashFolder || !_bin.IsSupported(Location.Root)
+        ? "the backup's trash folder"
+        : "the backup drive's Recycle Bin";
 
     /// <summary>Sends PC folders that no longer hold any files to the Recycle Bin, after an offload or delete emptied them.</summary>
     void RecycleEmptyFolders(string key)

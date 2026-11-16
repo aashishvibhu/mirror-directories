@@ -121,7 +121,9 @@ public sealed partial class DriveSyncSession
             var fromBackup = records.Values
                 .Where(r => !stillOnPc.Contains(r.Key) && !File.Exists(SourcePathFor(r.Key)))
                 .ToList();
-            foreach (var (key, problem) in RemoveFromBackup(fromBackup, NewStamp()))
+            var removed = RemoveFromBackup(fromBackup, NewStamp(), out int fellBack);
+            result.SentToTrashFolder = fellBack;
+            foreach (var (key, problem) in removed)
             {
                 var record = records[key];
                 if (problem is null)

@@ -1,96 +1,176 @@
 using DriveSync.Core.IO;
 using DriveSync.Core.Model;
 using DriveSync.Core.RecycleBin;
-using DriveSync.Core.Scanning;
 
 namespace DriveSync.Core.Engine;
 
 public sealed partial class DriveSyncSession
 {
-    /// <summary>
-    /// Copies files from the backup back to the PC (or to <see cref="RestoreRequest.TargetFolder"/>).
-    /// A different file already in the way is renamed, never replaced.
-    /// </summary>
-    public async Task<RestoreResult> RestoreAsync(RestoreRequest request, IProgress<SyncProgress>? progress = null, CancellationToken ct = default)
+    enum RestoreAction { Restore, AlreadyThere, InTheWay, MissingOnBackup }
+
+    /// <summary>One file to restore: where its contents are now, and where they should go.</summary>
+    sealed record RestoreItem(string Key, string From, string Target, long Size, FileRecord? Record);
+
+    List<RestoreItem> RestoreItems(RestoreRequest request)
     {
-        var result = new RestoreResult();
-        var report = new ProgressThrottle(progress);
-        var items = new Dictionary<string, string>(KeyPath.Comparer); // key -> where its contents are now
+        var items = new Dictionary<string, RestoreItem>(KeyPath.Comparer);
         foreach (string prefix in request.Paths.Select(ResolveKey).Distinct(KeyPath.Comparer))
         {
             switch (request.Source)
             {
                 case RestoreSource.CurrentBackup:
                     foreach (var record in Catalog.Query(underKey: prefix).Where(r => r.State != FileState.Deleted))
-                        items.TryAdd(record.Key, Location.PathFor(record.Key));
+                        items.TryAdd(record.Key, new RestoreItem(record.Key, Location.PathFor(record.Key), TargetFor(request, record.Key), record.Size, record));
                     break;
                 case RestoreSource.OldVersion:
                     if (string.IsNullOrEmpty(request.VersionStamp))
                         throw new DriveSyncException("Pick which version to restore.");
                     foreach (var version in ListVersions(prefix).Where(v => v.Stamp == request.VersionStamp))
-                        items.TryAdd(version.Key, version.Path);
+                        items.TryAdd(version.Key, new RestoreItem(version.Key, version.Path, TargetFor(request, version.Key), version.Size, null));
                     break;
                 case RestoreSource.Deleted:
                     foreach (var deleted in ListDeleted(prefix))
-                        items.TryAdd(deleted.Key, deleted.DataPath);
+                        items.TryAdd(deleted.Key, new RestoreItem(deleted.Key, deleted.DataPath, TargetFor(request, deleted.Key), deleted.Size, null));
                     break;
             }
         }
+        return [.. items.Values];
+    }
+
+    string TargetFor(RestoreRequest request, string key) =>
+        request.TargetFolder is null ? OriginalPlaceFor(key) : Path.Combine(request.TargetFolder, key);
+
+    /// <summary>Where a key lived on the PC, including folders that were later taken out of this backup.</summary>
+    string OriginalPlaceFor(string key)
+    {
+        if (_sources.ContainsKey(KeyPath.SourceName(key)))
+            return SourcePathFor(key);
+        if (RemovedFolderFor(key) is { Path.Length: > 0 } removed)
+        {
+            string relative = KeyPath.Relative(key);
+            return relative.Length == 0 ? removed.Path : Path.Combine(removed.Path, relative);
+        }
+        throw new DriveSyncException($"DriveSync doesn't know where {KeyPath.SourceName(key)} was on this PC. Pick a folder to restore it to.");
+    }
+
+    static RestoreAction Classify(RestoreItem item)
+    {
+        var backup = new FileInfo(item.From);
+        if (!backup.Exists)
+            return RestoreAction.MissingOnBackup;
+        var existing = new FileInfo(item.Target);
+        if (!existing.Exists)
+            return RestoreAction.Restore;
+        // Backup drives formatted as exFAT or FAT32 round times (to 10 ms or 2 s), so allow for that.
+        return existing.Length == backup.Length && (existing.LastWriteTimeUtc - backup.LastWriteTimeUtc).Duration() <= TimeSpan.FromSeconds(2)
+            ? RestoreAction.AlreadyThere
+            : RestoreAction.InTheWay;
+    }
+
+    /// <summary>Works out what a restore would do. Changes nothing.</summary>
+    public RestorePlan PlanRestore(RestoreRequest request)
+    {
+        var plan = new RestorePlan();
+        foreach (var item in RestoreItems(request))
+        {
+            switch (Classify(item))
+            {
+                case RestoreAction.MissingOnBackup:
+                    plan.MissingOnBackup++;
+                    break;
+                case RestoreAction.AlreadyThere:
+                    plan.AlreadyThere++;
+                    break;
+                case RestoreAction.InTheWay:
+                    plan.InTheWay++;
+                    plan.ToRestore++;
+                    plan.Bytes += item.Size;
+                    break;
+                default:
+                    plan.ToRestore++;
+                    plan.Bytes += item.Size;
+                    break;
+            }
+        }
+        return plan;
+    }
+
+    /// <summary>
+    /// Copies files from the backup back to the PC (or to <see cref="RestoreRequest.TargetFolder"/>).
+    /// A different file already in the way is renamed, never replaced.
+    /// </summary>
+    public async Task<RestoreResult> RestoreAsync(RestoreRequest request, IProgress<SyncProgress>? progress = null, CancellationToken ct = default, SyncControl? control = null)
+    {
+        var result = new RestoreResult();
+        var report = new ProgressThrottle(progress);
+        var items = RestoreItems(request);
         if (items.Count == 0)
             result.Problems.Add(new Problem(string.Join(", ", request.Paths), "There's nothing to restore here."));
 
-        int done = 0;
-        foreach (var (key, from) in items)
+        var work = new List<RestoreItem>();
+        foreach (var item in items)
         {
-            ct.ThrowIfCancellationRequested();
-            report.Report(new SyncProgress("Restoring", done++, items.Count, 0, 0, key));
-            if (!File.Exists(from))
+            switch (Classify(item))
             {
-                result.Problems.Add(new Problem(key, "The backup copy of this file is missing."));
-                continue;
+                case RestoreAction.MissingOnBackup:
+                    result.Problems.Add(new Problem(item.Key, "The backup copy of this file is missing."));
+                    break;
+                case RestoreAction.AlreadyThere:
+                    result.AlreadyThere++;
+                    if (IsOriginalPlace(request))
+                        MarkBackOnPc(item.Key);
+                    break;
+                default:
+                    work.Add(item);
+                    break;
             }
+        }
+        EnsureRoomOnPc(work);
 
-            string target = request.TargetFolder is null ? SourcePathFor(key) : Path.Combine(request.TargetFolder, key);
-            bool toOriginalPlace = request.TargetFolder is null && request.Source == RestoreSource.CurrentBackup;
+        long bytesTotal = work.Sum(i => i.Size), bytesDone = 0;
+        for (int i = 0; i < work.Count; i++)
+        {
+            if (control is { IsPaused: true })
+            {
+                report.Report(new SyncProgress("Paused", i, work.Count, bytesDone, bytesTotal, null), force: true);
+                await control.WaitIfPausedAsync(ct);
+            }
+            ct.ThrowIfCancellationRequested();
+            var item = work[i];
+            int filesDone = i;
+            report.Report(new SyncProgress("Restoring", filesDone, work.Count, bytesDone, bytesTotal, item.Key));
             try
             {
-                if (File.Exists(target))
+                if (File.Exists(item.Target))
                 {
-                    var existing = new FileInfo(target);
-                    var backup = new FileInfo(from);
-                    // Backup drives formatted as exFAT or FAT32 round times (to 10 ms or 2 s), so allow for that.
-                    if (existing.Length == backup.Length && (existing.LastWriteTimeUtc - backup.LastWriteTimeUtc).Duration() <= TimeSpan.FromSeconds(2))
-                    {
-                        result.AlreadyThere++;
-                        if (toOriginalPlace)
-                            MarkBackOnPc(key);
-                        continue;
-                    }
-                    File.Move(target, FsUtil.UniquePath(AsidePath(target)));
+                    File.Move(item.Target, FsUtil.UniquePath(AsidePath(item.Target)));
                     result.KeptBoth++;
                 }
 
-                FsUtil.EnsureParent(target);
-                string temp = target + FsUtil.TempSuffix;
+                FsUtil.EnsureParent(item.Target);
+                string temp = item.Target + FsUtil.TempSuffix;
                 try
                 {
-                    string hash = await FileHasher.CopyWithHashAsync(from, temp, null, ct);
-                    var known = request.Source == RestoreSource.CurrentBackup ? Catalog.Get(key) : null;
-                    if (known is { Hash.Length: > 0 })
+                    string hash = await FileHasher.CopyWithHashAsync(item.From, temp, n =>
+                    {
+                        bytesDone += n;
+                        report.Report(new SyncProgress("Restoring", filesDone, work.Count, bytesDone, bytesTotal, item.Key));
+                    }, ct);
+                    if (item.Record is { Hash.Length: > 0 } known)
                     {
                         if (!known.Hash.Equals(hash, StringComparison.OrdinalIgnoreCase))
                         {
-                            result.Problems.Add(new Problem(key,
+                            result.Problems.Add(new Problem(item.Key,
                                 "The backup copy no longer matches its checksum, so it may be damaged. It was restored anyway; check the file, and run a full health check."));
                         }
-                        else if (toOriginalPlace)
+                        else if (IsOriginalPlace(request))
                         {
                             // Give the file the exact time on record, so the next sync sees it as unchanged
                             // even when the backup drive rounds times.
                             File.SetLastWriteTimeUtc(temp, new DateTime(known.ModifiedUtcTicks, DateTimeKind.Utc));
                         }
                     }
-                    File.Move(temp, target);
+                    File.Move(temp, item.Target);
                 }
                 catch
                 {
@@ -100,51 +180,51 @@ public sealed partial class DriveSyncSession
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                result.Problems.Add(new Problem(key, $"Couldn't restore this file: {e.Message}"));
+                result.Problems.Add(new Problem(item.Key, $"Couldn't restore this file: {e.Message}"));
                 continue;
             }
 
             result.Restored++;
-            result.RestoredPaths.Add(target);
-            Catalog.Log("restored", key, request.Source.ToString());
-            if (toOriginalPlace)
-                MarkBackOnPc(key);
+            result.BytesRestored += item.Size;
+            result.RestoredPaths.Add(item.Target);
+            Catalog.Log("restored", item.Key, request.Source.ToString());
+            if (IsOriginalPlace(request))
+                MarkBackOnPc(item.Key);
         }
+        report.Report(new SyncProgress("Done", work.Count, work.Count, bytesDone, bytesTotal, null), force: true);
         return result;
     }
 
-    /// <summary>Older versions of the files at or under <paramref name="path"/>, newest first.</summary>
-    public IReadOnlyList<VersionEntry> ListVersions(string path)
-    {
-        string prefix = ResolveKey(path);
-        var versions = new List<VersionEntry>();
-        if (!Directory.Exists(Location.VersionsDir))
-            return versions;
-        foreach (string stampDir in Directory.EnumerateDirectories(Location.VersionsDir).OrderByDescending(d => d, StringComparer.Ordinal))
-        {
-            string stamp = Path.GetFileName(stampDir);
-            string candidate = Path.Combine(stampDir, prefix);
-            if (File.Exists(candidate))
-                versions.Add(Version(stamp, prefix, candidate));
-            else if (Directory.Exists(candidate))
-            {
-                foreach (string file in Directory.EnumerateFiles(candidate, "*", SearchOption.AllDirectories))
-                    versions.Add(Version(stamp, KeyPath.Combine(prefix, Path.GetRelativePath(candidate, file)), file));
-            }
-        }
-        return versions;
+    static bool IsOriginalPlace(RestoreRequest request) => request.TargetFolder is null && request.Source == RestoreSource.CurrentBackup;
 
-        static VersionEntry Version(string stamp, string key, string file)
+    /// <summary>Stops before copying anything if a drive on the PC doesn't have room for what's coming back.</summary>
+    static void EnsureRoomOnPc(List<RestoreItem> work)
+    {
+        foreach (var group in work.GroupBy(i => Path.GetPathRoot(Path.GetFullPath(i.Target)) ?? "", StringComparer.OrdinalIgnoreCase))
         {
-            var info = new FileInfo(file);
-            return new VersionEntry(stamp, key, info.Length, info.LastWriteTimeUtc, file);
+            if (group.Key.Length == 0 || group.Key.StartsWith(@"\\", StringComparison.Ordinal))
+                continue;
+            long needed = group.Sum(i => i.Size), free;
+            try
+            {
+                free = new DriveInfo(group.Key).AvailableFreeSpace;
+            }
+            catch (Exception e) when (e is IOException or ArgumentException)
+            {
+                continue;
+            }
+            if (needed > free)
+            {
+                throw new DriveSyncException(
+                    $"Restoring needs {Formatting.Size(needed)} on {group.Key}, but only {Formatting.Size(free)} is free. Free up space or restore fewer files.");
+            }
         }
     }
 
-    /// <summary>Files deleted on purpose at or under <paramref name="path"/>, and where their backup copies are now.</summary>
-    public IReadOnlyList<DeletedEntry> ListDeleted(string path)
+    /// <summary>Files deleted on purpose at or under <paramref name="path"/> (everywhere when null), and where their backup copies are now.</summary>
+    public IReadOnlyList<DeletedEntry> ListDeleted(string? path = null)
     {
-        string prefix = ResolveKey(path);
+        string? prefix = path is null ? null : ResolveKey(path);
         var deleted = new List<DeletedEntry>();
         var records = Catalog.Query(FileState.Deleted, prefix);
         if (records.Count == 0)
@@ -177,6 +257,8 @@ public sealed partial class DriveSyncSession
 
     void MarkBackOnPc(string key)
     {
+        if (!_sources.ContainsKey(KeyPath.SourceName(key)))
+            return;
         var record = Catalog.Get(key);
         if (record is { State: FileState.Archived or FileState.Pending })
             SetState(record, FileState.Active, "back-on-pc", "restored");
@@ -185,94 +267,4 @@ public sealed partial class DriveSyncSession
     static string AsidePath(string path) =>
         Path.Combine(Path.GetDirectoryName(path)!,
             $"{Path.GetFileNameWithoutExtension(path)} (before restore {DateTime.Now:yyyy-MM-dd HHmm}){Path.GetExtension(path)}");
-
-    /// <summary>
-    /// Checks every backup copy against the catalog: quick (exists, right size) or full (checksum).
-    /// With <paramref name="repair"/>, recopies damaged files the PC still has; the damaged copy is moved to versions, not removed.
-    /// </summary>
-    public async Task<HealthReport> CheckHealthAsync(bool full, bool repair = false, IProgress<SyncProgress>? progress = null, CancellationToken ct = default)
-    {
-        var report = new HealthReport { FullCheck = full };
-        var throttle = new ProgressThrottle(progress);
-        var records = Catalog.LoadAll();
-        var live = records.Values.Where(r => r.State != FileState.Deleted).ToList();
-        long bytesTotal = full ? live.Sum(r => r.Size) : 0, bytesDone = 0;
-
-        await Task.Run(() =>
-        {
-            foreach (var record in live)
-            {
-                ct.ThrowIfCancellationRequested();
-                throttle.Report(new SyncProgress("Checking backup copies", report.Checked, live.Count, bytesDone, bytesTotal, record.Key));
-                var info = new FileInfo(Location.PathFor(record.Key));
-                if (!info.Exists)
-                    report.Issues.Add(new HealthIssue(record, HealthProblem.Missing));
-                else if (info.Length != record.Size)
-                    report.Issues.Add(new HealthIssue(record, HealthProblem.WrongSize));
-                else if (full && !FileHasher.HashFile(info.FullName, ct).Equals(record.Hash, StringComparison.OrdinalIgnoreCase))
-                    report.Issues.Add(new HealthIssue(record, HealthProblem.Damaged));
-                report.Checked++;
-                bytesDone += full ? record.Size : 0;
-            }
-
-            foreach (var source in Profile.Sources)
-            {
-                string folder = Path.Combine(Location.Root, source.Name);
-                if (!Directory.Exists(folder))
-                    continue;
-                foreach (string file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
-                {
-                    if (file.EndsWith(FsUtil.TempSuffix, StringComparison.OrdinalIgnoreCase))
-                    {
-                        report.LeftoverTempFiles.Add(file);
-                        continue;
-                    }
-                    string key = Path.GetRelativePath(Location.Root, file);
-                    if (!records.TryGetValue(key, out var record) || record.State == FileState.Deleted)
-                        report.Untracked.Add(key);
-                }
-            }
-        }, ct);
-
-        if (!repair)
-            return report;
-
-        string stamp = NewStamp();
-        using (Catalog.Batch())
-        {
-            foreach (var issue in report.Issues)
-            {
-                var record = issue.Record;
-                if (record.State != FileState.Active)
-                {
-                    issue.Note = "This file is no longer on the PC, so the backup copy was the only one. It can't be repaired.";
-                    continue;
-                }
-                string source = SourcePathFor(record.Key);
-                var info = new FileInfo(source);
-                if (!info.Exists || info.Length != record.Size || info.LastWriteTimeUtc.Ticks != record.ModifiedUtcTicks)
-                {
-                    issue.Note = "The file on the PC has changed or is gone. Run a sync to back up the current version.";
-                    continue;
-                }
-                string backup = Location.PathFor(record.Key);
-                if (File.Exists(backup))
-                    MoveToVersions(backup, record.Key, stamp);
-                var problems = new List<Problem>();
-                var (_, repaired) = await BackUpFileAsync(new ScannedFile(record.Key, source, info.Length, record.ModifiedUtcTicks), stamp, problems, null, ct);
-                if (repaired is not null)
-                {
-                    issue.Repaired = true;
-                    report.Repaired++;
-                }
-                else
-                {
-                    issue.Note = problems.FirstOrDefault()?.Message;
-                }
-            }
-        }
-        foreach (string temp in report.LeftoverTempFiles)
-            FsUtil.TryRemoveOwnTemp(temp);
-        return report;
-    }
 }
