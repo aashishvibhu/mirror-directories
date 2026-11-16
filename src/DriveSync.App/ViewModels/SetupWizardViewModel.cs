@@ -25,9 +25,13 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     public SetupWizardViewModel(AppServices services, IEnumerable<FolderSuggestion> suggestions)
     {
         _services = services;
+        _suggestions = [.. suggestions];
+        foreach (var choice in AdoptChoices())
+            AdoptModes.Add(choice);
+        AdoptModes[0].IsSelected = true;
         IsFirstBackup = services.Backups.Count == 0;
         Name = IsFirstBackup ? "My backup" : NextFreeName(services.Backups);
-        foreach (var suggestion in suggestions)
+        foreach (var suggestion in _suggestions)
             AddFolderChoice(suggestion.Name, suggestion.Path, selected: false);
         foreach (var choice in PolicyChoices())
             Policies.Add(choice);
@@ -41,12 +45,125 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
         new(MissingFilePolicy.Ask, "Ask me (recommended)",
             "DriveSync lists missing files and you decide: deleted on purpose, or removed to free space. Until you answer, they stay on the backup."),
         new(MissingFilePolicy.RecycleBinMeansDeleted, "Treat files in the Recycle Bin as deleted",
-            "If a missing file is in this PC's Recycle Bin, its backup copy goes to the backup drive's Recycle Bin too. DriveSync asks about the rest."),
+            "If a missing file is in this PC's Recycle Bin, its backup copy is removed from the backup too (and can still be restored). DriveSync asks about the rest."),
         new(MissingFilePolicy.AlwaysKeep, "Always keep them on the backup",
             "Missing files are treated as removed to free space. The backup never loses anything."),
         new(MissingFilePolicy.AlwaysRemove, "Always remove them from the backup",
-            "The backup follows your PC. Copies of missing files go to the backup drive's Recycle Bin."),
+            "The backup follows your PC. Copies of missing files are removed from the backup, and can be restored until you erase them yourself."),
     ];
+
+    readonly List<FolderSuggestion> _suggestions;
+
+    // Using a backup that's already on the drive (made on another PC, or removed from the app earlier)
+
+    static IEnumerable<AdoptChoiceViewModel> AdoptChoices() =>
+    [
+        new(FirstRun.RestoreEverything, "Copy everything back to this PC",
+            "For a new or reset PC. Every file on the backup is restored into the folders above, then backing up carries on from here."),
+        new(FirstRun.KeepOnDrive, "Leave the files on the drive",
+            "Files that aren't on this PC stay on the backup, marked as offloaded. Nothing is asked about and nothing is removed. Restore any of them later from Files."),
+        new(FirstRun.Review, "Show me the differences first",
+            "DriveSync compares this PC with the backup and you review what it found before anything changes."),
+    ];
+
+    FoundBackup? _found;
+
+    /// <summary>What the first sync does once the wizard closes. Only differs from a plain backup after adopting one.</summary>
+    public FirstRun FirstRun { get; private set; } = FirstRun.Backup;
+
+    /// <summary>Opens Windows' BitLocker page. Set by the window.</summary>
+    public Action? OpenBitLocker { get; set; }
+
+    public ObservableCollection<AdoptFolderViewModel> AdoptFolders { get; } = [];
+
+    public ObservableCollection<AdoptChoiceViewModel> AdoptModes { get; } = [];
+
+    /// <summary>"This drive already holds the backup …", shown on the drive step with a button to use it.</summary>
+    [ObservableProperty]
+    public partial string? FoundNote { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsStep1), nameof(IsStep2), nameof(IsStep3), nameof(IsStep4), nameof(ShowNext), nameof(ShowFinish))]
+    [NotifyCanExecuteChangedFor(nameof(BackCommand))]
+    public partial bool IsAdopting { get; set; }
+
+    [ObservableProperty]
+    public partial string AdoptName { get; set; } = "";
+
+    [ObservableProperty]
+    public partial string AdoptSummary { get; set; } = "";
+
+    /// <summary>True when the selected drive isn't encrypted, so the wizard can suggest BitLocker once.</summary>
+    [ObservableProperty]
+    public partial bool ShowBitLockerHint { get; set; }
+
+    public bool ShowNext => !IsLastStep && !IsAdopting;
+
+    public bool ShowFinish => IsLastStep && !IsAdopting;
+
+    void LookForBackupOn(DriveChoiceViewModel? drive)
+    {
+        _found = drive is null ? null : BackupSetup.FindBackups(drive.Root, _services.Backups).FirstOrDefault();
+        if (_found is null)
+        {
+            FoundNote = null;
+            return;
+        }
+        string when = _found.LastSyncUtc is { } t ? $", last backed up {Format.Ago(t)}" : "";
+        string from = _found.FromAnotherPc ? $" from the PC {_found.Manifest!.PcName}" : "";
+        FoundNote = $"This place already holds the backup \"{_found.Name}\"{from}: {Formatting.Files(_found.Files)}, {Formatting.Size(_found.Bytes)}{when}. "
+            + "You can carry on using it here instead of starting a new one.";
+    }
+
+    [RelayCommand]
+    void OpenBitLockerPage() => OpenBitLocker?.Invoke();
+
+    [RelayCommand]
+    void UseFoundBackup()
+    {
+        if (_found is null)
+            return;
+        Error = null;
+        AdoptName = _services.Backups.Any(b => b.Name.Equals(_found.Name, StringComparison.OrdinalIgnoreCase)) ? NextFreeName(_services.Backups) : _found.Name;
+        AdoptFolders.Clear();
+        foreach (var folder in _found.Folders)
+        {
+            string path = folder.OriginalPath.Length > 0 && Directory.Exists(folder.OriginalPath) ? folder.OriginalPath
+                : _suggestions.FirstOrDefault(s => s.Name.Equals(folder.Name, StringComparison.OrdinalIgnoreCase))?.Path ?? "";
+            AdoptFolders.Add(new AdoptFolderViewModel(this, folder) { Path = path });
+        }
+        AdoptSummary = $"{Formatting.Files(_found.Files)}, {Formatting.Size(_found.Bytes)} in {_found.Root}. Copying everything back needs that much room on this PC.";
+        IsAdopting = true;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanFinish))]
+    async Task FinishAdopt()
+    {
+        if (_found is null)
+            return;
+        IsCreating = true;
+        Error = null;
+        var found = _found;
+        string name = AdoptName;
+        var paths = AdoptFolders.Where(f => f.Path.Length > 0).ToDictionary(f => f.Name, f => f.Path, StringComparer.OrdinalIgnoreCase);
+        var existing = _services.Backups.ToList();
+        try
+        {
+            var profile = await Task.Run(() => BackupSetup.Adopt(found, name, paths, existing));
+            FirstRun = AdoptModes.First(m => m.IsSelected).Mode;
+            _services.Add(profile);
+            _sizing.Cancel();
+            Completed?.Invoke(profile);
+        }
+        catch (Exception e) when (e is DriveSyncException or IOException or UnauthorizedAccessException)
+        {
+            Error = e is DriveSyncException ? e.Message : $"Couldn't set up the folders: {e.Message}";
+        }
+        finally
+        {
+            IsCreating = false;
+        }
+    }
 
     static string NextFreeName(IReadOnlyList<BackupProfile> backups)
     {
@@ -99,17 +216,17 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     public event Action<BackupProfile>? Completed;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsStep1), nameof(IsStep2), nameof(IsStep3), nameof(IsStep4), nameof(IsLastStep), nameof(CurrentStep))]
+    [NotifyPropertyChangedFor(nameof(IsStep1), nameof(IsStep2), nameof(IsStep3), nameof(IsStep4), nameof(IsLastStep), nameof(CurrentStep), nameof(ShowNext), nameof(ShowFinish))]
     [NotifyCanExecuteChangedFor(nameof(NextCommand), nameof(BackCommand))]
     public partial int Step { get; set; } = 1;
 
-    public bool IsStep1 => Step == 1;
+    public bool IsStep1 => Step == 1 && !IsAdopting;
 
-    public bool IsStep2 => Step == 2;
+    public bool IsStep2 => Step == 2 && !IsAdopting;
 
-    public bool IsStep3 => Step == 3;
+    public bool IsStep3 => Step == 3 && !IsAdopting;
 
-    public bool IsStep4 => Step == 4;
+    public bool IsStep4 => Step == 4 && !IsAdopting;
 
     public bool IsLastStep => Step == 4;
 
@@ -129,7 +246,7 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     public partial string? Error { get; set; }
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(FinishCommand), nameof(BackCommand))]
+    [NotifyCanExecuteChangedFor(nameof(FinishCommand), nameof(BackCommand), nameof(FinishAdoptCommand))]
     public partial bool IsCreating { get; set; }
 
     // Step 4 summary
@@ -173,13 +290,16 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
         Step++;
     }
 
-    bool CanGoBack() => Step > 1 && !IsCreating;
+    bool CanGoBack() => (Step > 1 || IsAdopting) && !IsCreating;
 
     [RelayCommand(CanExecute = nameof(CanGoBack))]
     void Back()
     {
         Error = null;
-        Step--;
+        if (IsAdopting)
+            IsAdopting = false; // back to the drive step
+        else
+            Step--;
     }
 
     [RelayCommand]
@@ -268,7 +388,17 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
         {
             string name = Name.Trim();
             var existing = _services.Backups.ToList();
-            var profile = await Task.Run(() => BackupSetup.CreateProfile(target, folders, name, existing));
+            var profile = await Task.Run(() =>
+            {
+                var created = BackupSetup.CreateProfile(target, folders, name, existing);
+                // A brand-new backup keeps what it removes in its own trash folder: no size limit, and the same on every PC.
+                // One that was already on the drive keeps the setting it had.
+                if (!BackupLocation.HasCatalog(created.LastKnownRoot!))
+                    created.RemovedFilesGoTo = RemovedFilesGoTo.TrashFolder;
+                else if (BackupManifest.TryRead(created.LastKnownRoot!) is { } manifest)
+                    created.RemovedFilesGoTo = manifest.RemovedFilesGoTo;
+                return created;
+            });
             profile.MissingFilePolicy = policy;
             _services.Add(profile);
             _sizing.Cancel();
@@ -301,6 +431,12 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
             UpdateSummary();
     }
 
+    internal void OnDriveChecked(DriveChoiceViewModel drive)
+    {
+        if (ReferenceEquals(drive, SelectedDrive))
+            UpdateDriveWarning();
+    }
+
     internal void OnDriveSelected(DriveChoiceViewModel drive)
     {
         // Radio buttons only clear each other when clicked. A choice selected from code
@@ -317,6 +453,8 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
     void UpdateDriveWarning()
     {
         var drive = SelectedDrive;
+        LookForBackupOn(drive);
+        ShowBitLockerHint = drive is { Encryption: Core.IO.EncryptionState.NotEncrypted, IsSystemDrive: false };
         if (drive is null)
         {
             DriveWarning = null;
@@ -325,8 +463,7 @@ public sealed partial class SetupWizardViewModel : ObservableObject, IDisposable
         var warnings = new List<string>();
         if (!drive.IsCustomFolder && SelectedFolders.Any(f => BackupSetup.IsOnSameDrive(f.Path, drive.Root)))
             warnings.Add("This is the same drive as some of your folders. If it fails, you'd lose the files and the backup together. Pick an external drive if you can.");
-        if (drive.IsRemovable)
-            warnings.Add("Windows has no Recycle Bin on removable drives, so anything DriveSync removes from this backup goes to a trash folder on the drive instead. DriveSync never empties it.");
+
         long needed = SelectedFolders.Sum(f => f.Bytes ?? 0);
         if (drive.FreeBytes is { } free && needed > free)
             warnings.Add($"Your folders take {Formatting.Size(needed)}, but this drive has only {Formatting.Size(free)} free.");
@@ -447,6 +584,17 @@ public sealed partial class DriveChoiceViewModel : ObservableObject
 
     public bool IsRemovable { get; private init; }
 
+    public bool IsSystemDrive { get; private init; }
+
+    /// <summary>Whether BitLocker protects the drive; worked out in the background after the list is shown.</summary>
+    public Core.IO.EncryptionState Encryption { get; private set; }
+
+    async Task CheckEncryptionAsync()
+    {
+        Encryption = await Task.Run(() => Core.IO.DriveEncryption.Check(Root));
+        _owner.OnDriveChecked(this);
+    }
+
     public bool IsCustomFolder { get; private init; }
 
     /// <summary>"Has Personal files" for backups the app knows, or "Has a DriveSync backup" for one it would reconnect to.</summary>
@@ -483,14 +631,18 @@ public sealed partial class DriveChoiceViewModel : ObservableObject
             _ => "Local or external drive",
         };
         long total = drive.TotalSize, free = drive.AvailableFreeSpace;
-        return new DriveChoiceViewModel(owner, root, $"{root.TrimEnd('\\')}  {label}", kind)
+        var choice = new DriveChoiceViewModel(owner, root, $"{root.TrimEnd('\\')}  {label}", kind)
         {
             FreeBytes = free,
             UsedPercent = total > 0 ? 100.0 * (total - free) / total : 0,
             SpaceText = $"{Formatting.Size(free)} free of {Formatting.Size(total)}",
             IsRemovable = drive.DriveType == DriveType.Removable,
+            IsSystemDrive = root.Equals(systemRoot, StringComparison.OrdinalIgnoreCase),
             ExistingNote = NoteFor(root, owner.ExistingBackups),
         };
+        if (drive.DriveType is DriveType.Fixed or DriveType.Removable)
+            _ = choice.CheckEncryptionAsync();
+        return choice;
     }
 
     internal static DriveChoiceViewModel FromFolder(SetupWizardViewModel owner, string folder)
@@ -503,6 +655,46 @@ public sealed partial class DriveChoiceViewModel : ObservableObject
             ExistingNote = NoteFor(path, owner.ExistingBackups),
         };
     }
+}
+
+/// <summary>One of the backup's folders, and where it should live on this PC.</summary>
+public sealed partial class AdoptFolderViewModel(SetupWizardViewModel owner, FoundFolder folder) : ObservableObject
+{
+    public string Name { get; } = folder.Name;
+
+    public string Info { get; } = $"{Formatting.Files(folder.Files)} · {Formatting.Size(folder.Bytes)}"
+        + (folder.OriginalPath.Length > 0 ? $" · was {folder.OriginalPath}" : "");
+
+    /// <summary>The folder on this PC, or empty to leave this one on the drive without backing anything up into it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PathText), nameof(IsUsed))]
+    public partial string Path { get; set; } = "";
+
+    public bool IsUsed => Path.Length > 0;
+
+    public string PathText => Path.Length > 0 ? Path : "Not used on this PC. Its files stay on the drive.";
+
+    [RelayCommand]
+    void Choose()
+    {
+        if (owner.PickFolder?.Invoke() is { Length: > 0 } picked)
+            Path = System.IO.Path.TrimEndingDirectorySeparator(picked);
+    }
+
+    [RelayCommand]
+    void Skip() => Path = "";
+}
+
+public sealed partial class AdoptChoiceViewModel(FirstRun mode, string title, string description) : ObservableObject
+{
+    public FirstRun Mode { get; } = mode;
+
+    public string Title { get; } = title;
+
+    public string Description { get; } = description;
+
+    [ObservableProperty]
+    public partial bool IsSelected { get; set; }
 }
 
 public sealed partial class PolicyChoiceViewModel(MissingFilePolicy policy, string title, string description) : ObservableObject

@@ -196,6 +196,23 @@ internal static class DevTools
             await personal.ShowMissingAsync();
             await Save(window, outDir, $"07-missing-{suffix}");
 
+            await personal.ShowFilesAsync();
+            await personal.Files.OpenFolderCommand.ExecuteAsync("Desktop");
+            await Save(window, outDir, $"16-files-{suffix}");
+            if (personal.Files.Rows.FirstOrDefault(r => r.IsFolder) is { } folderRow)
+            {
+                folderRow.IsSelected = true;
+                personal.Files.RestoreSelectedCommand.Execute(null);
+                await Settle(1500);
+                await Save(window, outDir, $"17-restore-{suffix}");
+                personal.Restore.CloseCommand.Execute(null);
+                folderRow.IsSelected = false;
+            }
+            await personal.ShowStorageAsync();
+            await Save(window, outDir, $"18-storage-{suffix}");
+            await personal.ShowHealthAsync();
+            await Save(window, outDir, $"19-health-{suffix}");
+
             await personal.EditCommand.ExecuteAsync(null);
             await Save(window, outDir, $"08-edit-backup-{suffix}");
             var edit = (EditBackupViewModel)personal.Content;
@@ -252,6 +269,23 @@ internal static class DevTools
         await app.Overview.RefreshAsync();
         await Save(appWindow, outDir, "15-overview-after-remove-light");
         appWindow.Close();
+
+        // The backup just removed from the app is still on its drive: Add backup finds it and offers to use it.
+        string forgotten = Path.Combine(demoRoot, "drive-f-unplugged");
+        if (Directory.Exists(forgotten))
+        {
+            using var adoptModel = new SetupWizardViewModel(services, suggestions);
+            var adoptWindow = Offscreen(new SetupWindow(adoptModel));
+            adoptWindow.Show();
+            adoptModel.Folders[0].IsSelected = true;
+            adoptModel.NextCommand.Execute(null);
+            adoptModel.PickFolder = () => forgotten;
+            adoptModel.ChooseDriveFolderCommand.Execute(null);
+            await Save(adoptWindow, outDir, "20-backup-found-light");
+            adoptModel.UseFoundBackupCommand.Execute(null);
+            await Save(adoptWindow, outDir, "21-use-this-backup-light");
+            adoptWindow.Close();
+        }
         return 0;
     }
 

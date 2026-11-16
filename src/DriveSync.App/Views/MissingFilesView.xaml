@@ -45,7 +45,7 @@
                             <ui:SymbolIcon FontSize="18" Foreground="{DynamicResource SystemFillColorCriticalBrush}" Symbol="Delete24" />
                             <TextBlock Margin="8,0,0,0" Style="{StaticResource Strong}" Text="Deleted on purpose" />
                         </StackPanel>
-                        <TextBlock Margin="0,4,0,0" Style="{StaticResource Secondary}" Text="Also removed from the backup: the copy goes to the backup drive's Recycle Bin." />
+                        <TextBlock Margin="0,4,0,0" Style="{StaticResource Secondary}" Text="{Binding DeletedHint}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
                         <StackPanel Orientation="Horizontal">
@@ -237,7 +237,7 @@
                     <TextBlock Margin="0,12,0,24" Style="{StaticResource Body}" Text="{Binding ConfirmMessage}" />
                     <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
                         <ui:Button MinWidth="96" Command="{Binding CancelConfirmCommand}" Content="Cancel" IsCancel="True" />
-                        <ui:Button Margin="8,0,0,0" Appearance="Danger" Command="{Binding ConfirmDeleteCommand}" Content="Send to Recycle Bin" Icon="{ui:SymbolIcon Delete24}" />
+                        <ui:Button Margin="8,0,0,0" Appearance="Danger" Command="{Binding ConfirmDeleteCommand}" Content="Remove from backup" Icon="{ui:SymbolIcon Delete24}" />
                     </StackPanel>
                 </StackPanel>
             </Border>

@@ -60,6 +60,9 @@ public sealed partial class MissingFilesViewModel(BackupPageViewModel page) : Ob
 
     public bool ShowEmptyState => !IsLoading && LoadError is null && TotalCount == 0;
 
+    /// <summary>What "Deleted on purpose" does, in this backup's own terms.</summary>
+    public string DeletedHint => $"Also removed from the backup: the copy goes to {page.RemovedPlace}.";
+
     partial void OnIsLoadingChanged(bool value) => OnPropertyChanged(nameof(ShowEmptyState));
 
     partial void OnLoadErrorChanged(string? value) => OnPropertyChanged(nameof(ShowEmptyState));
@@ -146,8 +149,8 @@ public sealed partial class MissingFilesViewModel(BackupPageViewModel page) : Ob
                 _awaitingConfirmation = [.. files];
                 long bytes = files.Sum(f => f.Size);
                 ConfirmTitle = files.Count == 1 ? $"Remove {files[0].Name} from the backup?" : $"Remove {files.Count:N0} files from the backup?";
-                ConfirmMessage = $"The backup {(files.Count == 1 ? "copy goes" : "copies go")} to the Recycle Bin on the backup drive ({Formatting.Size(bytes)}). "
-                    + "Nothing is erased: you can restore from there until you empty that Recycle Bin.";
+                ConfirmMessage = $"The backup {(files.Count == 1 ? "copy goes" : "copies go")} to {page.RemovedPlace} ({Formatting.Size(bytes)}). "
+                    + "Nothing is erased: you can restore from the Storage tab until you delete it there yourself.";
                 IsConfirmOpen = true;
                 break;
             case MissingDecision.KeepOnBackup:
@@ -215,7 +218,9 @@ public sealed partial class MissingFilesViewModel(BackupPageViewModel page) : Ob
 
             ResultIsWarning = result.Problems.Count > 0;
             string done = decision == MissingDecision.DeletedOnPurpose
-                ? $"Sent {Formatting.Files(result.Applied)} to the backup drive's Recycle Bin."
+                ? result.SentToTrashFolder > 0
+                    ? $"Removed {Formatting.Files(result.Applied)} from the backup. The Recycle Bin had no room, so {Formatting.Files(result.SentToTrashFolder)} went to the backup's trash folder instead."
+                    : $"Sent {Formatting.Files(result.Applied)} to {page.RemovedPlace}."
                 : $"Kept {Formatting.Files(result.Applied)} on the backup. {(result.Applied == 1 ? "It's" : "They're")} now marked as offloaded.";
             ResultMessage = result.Problems.Count == 0 ? done : $"{done} {Formatting.Files(result.Problems.Count)} couldn't be changed:";
             foreach (var problem in result.Problems.Take(20))

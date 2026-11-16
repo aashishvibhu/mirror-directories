@@ -79,12 +79,12 @@ public partial class App : Application
             if (created is null)
                 Shutdown();
             else
-                ShowMain(firstBackup: created);
+                ShowMain(firstBackup: created, viewModel.FirstRun);
         };
         window.Show();
     }
 
-    void ShowMain(BackupProfile? firstBackup)
+    void ShowMain(BackupProfile? firstBackup, FirstRun mode = FirstRun.Backup)
     {
         var viewModel = new MainViewModel(_services);
         var window = new MainWindow(viewModel);
@@ -97,7 +97,7 @@ public partial class App : Application
         if (page is not null)
         {
             viewModel.Select(page);
-            _ = viewModel.RunFirstBackupAsync(page);
+            _ = viewModel.RunFirstBackupAsync(page, mode);
         }
         else
         {
@@ -120,7 +120,7 @@ public partial class App : Application
         {
             viewModel.Dispose();
             if (created is not null)
-                main.OnBackupAdded(created, runFirstBackup: true);
+                main.OnBackupAdded(created, runFirstBackup: true, viewModel.FirstRun);
         };
         window.Show();
     }

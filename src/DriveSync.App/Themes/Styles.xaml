@@ -10,6 +10,7 @@
     <local:CountToVisibilityConverter x:Key="CountToVisibility" />
     <local:ZeroToVisibleConverter x:Key="ZeroToVisible" />
     <local:IsNavHeaderConverter x:Key="IsNavHeader" />
+    <local:StarConverter x:Key="Star" />
 
     <!--  Text  -->
     <Style x:Key="PageTitle" TargetType="TextBlock">

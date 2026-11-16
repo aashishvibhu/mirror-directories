@@ -27,6 +27,7 @@ public sealed partial class EditBackupViewModel : ObservableObject
     {
         _page = page;
         Name = page.Profile.Name;
+        UseTrashFolder = page.Profile.RemovedFilesGoTo == RemovedFilesGoTo.TrashFolder;
         foreach (var choice in SetupWizardViewModel.PolicyChoices())
         {
             choice.IsSelected = choice.Policy == page.Profile.MissingFilePolicy;
@@ -57,6 +58,10 @@ public sealed partial class EditBackupViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string Name { get; set; }
+
+    /// <summary>Removed copies go to the backup's trash folder (true) or the drive's Recycle Bin (false). Applied on Save.</summary>
+    [ObservableProperty]
+    public partial bool UseTrashFolder { get; set; }
 
     [ObservableProperty]
     public partial string DestinationPath { get; set; } = "";
@@ -216,6 +221,7 @@ public sealed partial class EditBackupViewModel : ObservableObject
         }
         Profile.Name = name;
         Profile.MissingFilePolicy = Policies.First(p => p.IsSelected).Policy;
+        Profile.RemovedFilesGoTo = UseTrashFolder ? RemovedFilesGoTo.TrashFolder : RemovedFilesGoTo.RecycleBinThenTrashFolder;
         Services.Save();
         _page.RefreshDescription();
         _page.ShowHome();
@@ -268,7 +274,7 @@ public sealed partial class EditBackupViewModel : ObservableObject
             ? $"Its {Formatting.Files(t.Files)} already on the backup ({Formatting.Size(t.Bytes)})"
             : "Its files already on the backup";
         RemoveFolderMessage = $"New changes in {row.Name} won't be copied to this backup any more. {onBackup} can stay or go:";
-        RecycleOptionDetail = "Frees space on the backup drive. Nothing is erased: you can restore them from that Recycle Bin until you empty it.";
+        RecycleOptionDetail = $"They go to {_page.RemovedPlace}. Nothing is erased: you can restore them from the Storage tab until you delete them there yourself.";
         var others = AllBackups.Where(b => b.Id != Profile.Id && b.Sources.Any(s => s.Path.Equals(row.Path, StringComparison.OrdinalIgnoreCase))).Select(b => b.Name).ToList();
         RemoveFolderNote = $"Your {row.Name} folder on this PC isn't touched."
             + (others.Count > 0 ? $" {string.Join(", ", others)} keeps backing it up." : "");
@@ -307,10 +313,10 @@ public sealed partial class EditBackupViewModel : ObservableObject
     internal void AskRecycleRemoved(FolderRowViewModel row)
     {
         string size = _totals is not null && _totals.TryGetValue(row.Name, out var t) ? $" ({Formatting.Size(t.Bytes)})" : "";
-        Confirm($"Send {row.Name}'s files to the Recycle Bin?",
-            $"The copies of {row.Name} on the backup{size} go to the backup drive's Recycle Bin. You can restore them from there until you empty it. "
+        Confirm($"Remove {row.Name}'s files from the backup?",
+            $"The copies of {row.Name} on the backup{size} go to {_page.RemovedPlace}. You can restore them from there until you delete them yourself. "
             + "Your folder on this PC isn't touched.",
-            "Send to Recycle Bin",
+            "Remove from backup",
             () => RecycleRemovedAsync(row.Name));
     }
 
@@ -329,7 +335,9 @@ public sealed partial class EditBackupViewModel : ObservableObject
             }
             Profile.RemovedFolders.RemoveAll(r => r.Name.Equals(folder, StringComparison.OrdinalIgnoreCase));
             _totals?.Remove(folder);
-            Saved($"Sent {folder}'s {Formatting.Files(result.Applied)} to the backup drive's Recycle Bin.");
+            Saved(result.SentToTrashFolder > 0
+                ? $"The Recycle Bin had no room, so {folder}'s {Formatting.Files(result.Applied)} went to the backup's trash folder instead."
+                : $"Sent {folder}'s {Formatting.Files(result.Applied)} to {_page.RemovedPlace}.");
         }
         catch (DriveSyncException e)
         {
@@ -589,7 +597,7 @@ public sealed partial class MoveTargetViewModel : ObservableObject
         }
         else if (drive.DriveType == DriveType.Removable)
         {
-            note = "Removable drives have no Recycle Bin, so files DriveSync removes from this backup go to a trash folder on the drive instead.";
+            note = "Removable drives have no Recycle Bin, so files DriveSync removes from this backup always go to its trash folder on the drive.";
         }
         return new MoveTargetViewModel(owner, root, $"{root.TrimEnd('\\')}  {label}")
         {

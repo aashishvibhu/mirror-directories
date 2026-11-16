@@ -108,6 +108,20 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
 
     public ObservableCollection<ActivityRow> Activity { get; } = [];
 
+    /// <summary>What takes the space on the backup drive. Null while the drive is unplugged.</summary>
+    [ObservableProperty]
+    public partial StorageBar? Storage { get; set; }
+
+    [RelayCommand]
+    Task ManageStorage() => page.ShowStorageAsync();
+
+    [RelayCommand]
+    Task ShowHealth() => page.ShowHealthAsync();
+
+    /// <summary>"BitLocker on", "not encrypted", or empty when Windows doesn't say.</summary>
+    string _encryption = "";
+    string? _encryptionCheckedFor;
+
     bool CanSync() => IsDriveConnected && !IsSyncing;
 
     partial void OnIsSyncingChanged(bool value) => page.OnSyncStateChanged();
@@ -157,8 +171,19 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
         try
         {
             using var session = await page.OpenSessionAsync();
-            var (summary, activity) = await Task.Run(() => (session.GetSummary(), session.Catalog.RecentActivity(40)));
+            var (summary, activity, usage) = await Task.Run(() => (session.GetSummary(), session.Catalog.RecentActivity(40), session.GetStorageUsage()));
+            if (_encryptionCheckedFor != summary.BackupRoot)
+            {
+                _encryptionCheckedFor = summary.BackupRoot;
+                _encryption = await Task.Run(() => DriveSync.Core.IO.DriveEncryption.Check(summary.BackupRoot)) switch
+                {
+                    DriveSync.Core.IO.EncryptionState.Encrypted => " · BitLocker on",
+                    DriveSync.Core.IO.EncryptionState.NotEncrypted => " · not encrypted",
+                    _ => "",
+                };
+            }
             Show(summary, activity, connected: true);
+            Storage = new StorageBar(usage);
         }
         catch (DriveBusyException e)
         {
@@ -201,6 +226,7 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
 
     void ShowNoData()
     {
+        Storage = null;
         IsDriveConnected = false;
         Status = BackupStatus.DriveMissing;
         StatusIcon = SymbolRegular.HardDrive20;
@@ -218,7 +244,11 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
         ProtectedSize = Formatting.Size(summary.Bytes(FileState.Active));
         OffloadedCount = archived.ToString("N0");
         OffloadedSize = archived == 0 ? "nothing offloaded yet" : Formatting.Size(summary.Bytes(FileState.Archived)) + " only on the drive";
-        ProblemsCount = summary.LastSyncProblems?.ToString("N0") ?? "–";
+        page.HealthIssues = summary.HealthIssues;
+        ProblemsCount = summary.LastSyncProblems is null && summary.HealthIssues == 0 ? "–" : ((summary.LastSyncProblems ?? 0) + summary.HealthIssues).ToString("N0");
+        ProblemsNote = summary.HealthIssues > 0
+            ? (summary.HealthIssues == 1 ? "1 backup copy needs a look · see Health" : $"{summary.HealthIssues:N0} backup copies need a look · see Health")
+            : "in the last sync";
         PendingHeadline = PendingCount == 1
             ? "1 file is missing from this PC"
             : $"{PendingCount:N0} files are missing from this PC";
@@ -229,6 +259,7 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
         string last = summary.LastSyncUtc is { } t ? "Backed up " + Format.Ago(t) : "Not backed up yet";
         if (!connected)
         {
+            Storage = null;
             Status = BackupStatus.DriveMissing;
             StatusIcon = SymbolRegular.HardDrive20;
             StatusTitle = "Backup drive not connected";
@@ -239,7 +270,7 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
         else
         {
             Status = summary.LastSyncUtc is null ? BackupStatus.NeverBackedUp
-                : PendingCount > 0 || summary.LastSyncProblems > 0 ? BackupStatus.NeedsAttention
+                : PendingCount > 0 || summary.LastSyncProblems > 0 || summary.HealthIssues > 0 ? BackupStatus.NeedsAttention
                 : BackupStatus.UpToDate;
             StatusIcon = Status switch
             {
@@ -249,7 +280,7 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
             };
             StatusTitle = last;
             string free = summary.DriveFreeBytes is { } f ? $" · {Formatting.Size(f)} free" : "";
-            StatusDetail = $"Backup drive connected at {summary.BackupRoot}{free}";
+            StatusDetail = $"Backup drive connected at {summary.BackupRoot}{free}{_encryption}";
         }
 
         Activity.Clear();
@@ -264,7 +295,9 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
         "moved" => "Moved",
         "offloaded" => "Offloaded",
         "kept-on-backup" => "Kept on backup",
-        "removed-from-backup" => "To Recycle Bin",
+        "removed-from-backup" => "Removed from backup",
+        "versions-removed" => "Old versions removed",
+        "damaged" => "Damaged copy found",
         "deleted-everywhere" => "Deleted",
         "missing-from-pc" => "Missing from PC",
         "back-on-pc" => "Back on PC",
@@ -316,6 +349,19 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
                 return await session.ApplyAsync(toApply, progress, token, control);
             });
             ShowResult(result);
+
+            // The rolling check: a few minutes of checksumming older copies. Cancel stops it; the sync is already done.
+            if (page.Profile.RollingCheck && !token.IsCancellationRequested)
+            {
+                var verified = await session.VerifySliceAsync(TimeSpan.FromMinutes(Math.Max(1, page.Profile.RollingCheckMinutes)), 20L << 30, progress, token);
+                if (verified.Failed > 0)
+                {
+                    LastRunNeedsAttention = true;
+                    LastRunMessage += verified.Failed == 1
+                        ? " A check of older copies found 1 damaged backup copy. See Health."
+                        : $" A check of older copies found {verified.Failed:N0} damaged backup copies. See Health.";
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -360,6 +406,14 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
             return;
         }
         SyncItem = p.CurrentItem;
+        if (p.Phase == "Checking older backup copies" && p.BytesTotal > 0)
+        {
+            IsProgressIndeterminate = false;
+            SyncPhase = "Sync finished. Checking older backup copies…";
+            SyncPercent = 100.0 * p.BytesDone / p.BytesTotal;
+            SyncDetail = $"{Formatting.Size(p.BytesDone)} of {Formatting.Size(p.BytesTotal)} · Cancel stops the check, not the backup";
+            return;
+        }
         if (p.Phase != "Copying" || p.BytesTotal <= 0)
         {
             IsProgressIndeterminate = true;
@@ -398,11 +452,15 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
         if (r.Moved > 0) parts.Add($"{r.Moved:N0} moved");
         if (r.BackOnPc > 0) parts.Add($"{r.BackOnPc:N0} back on this PC");
         if (r.KeptOnBackup > 0) parts.Add($"{r.KeptOnBackup:N0} kept on the backup");
-        if (r.RemovedFromBackup > 0) parts.Add($"{r.RemovedFromBackup:N0} sent to the backup drive's Recycle Bin");
+        if (r.RemovedFromBackup > 0) parts.Add($"{r.RemovedFromBackup:N0} sent to {page.RemovedPlace}");
 
         string message = parts.Count == 0
             ? "Everything was already backed up."
             : $"Sync finished in {Format.Duration(r.Duration).Replace("about ", "")}: {string.Join(", ", parts)}.";
+        if (r.SentToTrashFolder > 0)
+            message += $" The Recycle Bin had no room, so {Formatting.Files(r.SentToTrashFolder)} went to the backup's trash folder instead.";
+        if (r.HealthIssues > 0)
+            message += $" {Formatting.Files(r.HealthIssues)} on the backup drive {(r.HealthIssues == 1 ? "is" : "are")} missing or the wrong size. See Health.";
         if (r.MassDisappearance)
         {
             message += " So many files vanished at once that DriveSync didn't remove anything from the backup."
@@ -413,7 +471,7 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
         else if (r.Warnings.Count > 0)
             message += " Some places couldn't be looked at, so they weren't backed up this time:";
         LastRunMessage = message;
-        LastRunNeedsAttention = r.Problems.Count > 0 || r.MassDisappearance || r.Warnings.Count > 0;
+        LastRunNeedsAttention = r.Problems.Count > 0 || r.MassDisappearance || r.Warnings.Count > 0 || r.HealthIssues > 0;
         foreach (var problem in r.Problems.Take(50))
             LastRunProblems.Add($"{problem.Key}: {problem.Message}");
         if (r.Problems.Count > 50)

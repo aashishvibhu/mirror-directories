@@ -154,11 +154,11 @@ public sealed partial class PreviewViewModel(BackupPageViewModel page) : Observa
         return policy switch
         {
             MissingFilePolicy.AlwaysRemove =>
-                "This backup's rule is to remove missing files: when you sync, these copies go to the backup drive's Recycle Bin. Change the rule in Edit backup if that isn't what you want.",
+                "This backup's rule is to remove missing files: when you sync, these copies leave the backup (kept in its trash folder or Recycle Bin, so they can be restored). Change the rule in Edit backup if that isn't what you want.",
             MissingFilePolicy.AlwaysKeep =>
                 "These stay on the backup. This backup's rule marks missing files as offloaded.",
             MissingFilePolicy.RecycleBinMeansDeleted when plan.Missing.Any(m => m.InRecycleBin) =>
-                "This backup's rule treats files in this PC's Recycle Bin as deleted: when you sync, those copies go to the backup drive's Recycle Bin. DriveSync asks about the rest.",
+                "This backup's rule treats files in this PC's Recycle Bin as deleted: when you sync, those copies leave the backup (kept in its trash folder or Recycle Bin, so they can be restored). DriveSync asks about the rest.",
             _ => "These stay on the backup. After the sync, DriveSync asks whether you deleted them on purpose or removed them to free space.",
         };
     }

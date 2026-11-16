@@ -34,45 +34,39 @@
             </Grid>
             <Grid Margin="0,14,0,0">
                 <Border VerticalAlignment="Bottom" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" />
-                <StackPanel Orientation="Horizontal">
-                    <ui:Button Padding="14,8" Appearance="Transparent" Command="{Binding ShowHomeCommand}" Content="Home">
-                        <ui:Button.Style>
-                            <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
-                                <Setter Property="BorderBrush" Value="Transparent" />
-                                <Setter Property="BorderThickness" Value="0,0,0,3" />
-                                <Setter Property="CornerRadius" Value="0" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsHomeTab}" Value="True">
-                                        <Setter Property="BorderBrush" Value="{DynamicResource AccentFillColorDefaultBrush}" />
-                                        <Setter Property="FontWeight" Value="SemiBold" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ui:Button.Style>
-                    </ui:Button>
-                    <ui:Button Padding="14,8" Appearance="Transparent" Command="{Binding ShowMissingCommand}">
-                        <ui:Button.Style>
-                            <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
-                                <Setter Property="BorderBrush" Value="Transparent" />
-                                <Setter Property="BorderThickness" Value="0,0,0,3" />
-                                <Setter Property="CornerRadius" Value="0" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsMissingTab}" Value="True">
-                                        <Setter Property="BorderBrush" Value="{DynamicResource AccentFillColorDefaultBrush}" />
-                                        <Setter Property="FontWeight" Value="SemiBold" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ui:Button.Style>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock VerticalAlignment="Center" Text="Missing files" />
-                            <Border Margin="8,0,0,0" Background="{DynamicResource SystemFillColorCautionBrush}" Style="{StaticResource Pill}"
-                                    Visibility="{Binding PendingCount, Converter={StaticResource CountToVisibility}}">
-                                <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}" Text="{Binding PendingCount, StringFormat={}{0:N0}}" />
-                            </Border>
-                        </StackPanel>
-                    </ui:Button>
-                </StackPanel>
+                <ItemsControl ItemsSource="{Binding Tabs}" Focusable="False">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:PageTabViewModel}">
+                            <ui:Button Padding="14,8" Appearance="Transparent" AutomationProperties.Name="{Binding Title}" Command="{Binding Command}">
+                                <ui:Button.Style>
+                                    <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
+                                        <Setter Property="BorderBrush" Value="Transparent" />
+                                        <Setter Property="BorderThickness" Value="0,0,0,3" />
+                                        <Setter Property="CornerRadius" Value="0" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                <Setter Property="BorderBrush" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                                                <Setter Property="FontWeight" Value="SemiBold" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ui:Button.Style>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock VerticalAlignment="Center" Text="{Binding Title}" />
+                                    <Border Margin="8,0,0,0" Background="{DynamicResource SystemFillColorCautionBrush}" Style="{StaticResource Pill}"
+                                            Visibility="{Binding Badge, Converter={StaticResource CountToVisibility}}">
+                                        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}" Text="{Binding Badge, StringFormat={}{0:N0}}" />
+                                    </Border>
+                                </StackPanel>
+                            </ui:Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </Grid>
         </StackPanel>
 
@@ -90,7 +84,83 @@
                 <DataTemplate DataType="{x:Type vm:EditBackupViewModel}">
                     <views:EditBackupView />
                 </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:FilesViewModel}">
+                    <views:FilesView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:StorageViewModel}">
+                    <views:StorageView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:HealthViewModel}">
+                    <views:HealthView />
+                </DataTemplate>
             </ContentControl.Resources>
         </ContentControl>
+
+        <!--  Restore: where to, what would happen, then progress and the result  -->
+        <Grid Grid.RowSpan="2" Background="{DynamicResource SmokeFillColorDefaultBrush}" DataContext="{Binding Restore}"
+              Visibility="{Binding IsOpen, Converter={StaticResource BoolToVisibility}}">
+            <Border Width="560" Padding="28,24" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+
+                    <!--  Choices  -->
+                    <StackPanel Visibility="{Binding ShowsChoices, Converter={StaticResource BoolToVisibility}}">
+                        <RadioButton Margin="0,16,0,0" Content="Back where it was on this PC" GroupName="restoreTarget" IsChecked="{Binding ToOriginal}"
+                                     IsEnabled="{Binding CanUseOriginal}" />
+                        <RadioButton Margin="0,4,0,0" Content="Into a folder I choose" GroupName="restoreTarget"
+                                     IsChecked="{Binding ToOriginal, Mode=OneWay, Converter={StaticResource InverseBool}}" />
+                        <Grid Margin="28,6,0,0" Visibility="{Binding ToOriginal, Converter={StaticResource InverseBoolToVisibility}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Style="{StaticResource Secondary}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                       Text="{Binding TargetFolder, TargetNullValue='No folder chosen yet'}" ToolTip="{Binding TargetFolder}" />
+                            <ui:Button Grid.Column="1" Margin="12,0,0,0" Command="{Binding ChooseFolderCommand}" Content="Choose…" Icon="{ui:SymbolIcon FolderOpen24}" />
+                        </Grid>
+                        <Border Margin="0,16,0,0" Padding="14,10" CornerRadius="8" Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}">
+                            <Grid>
+                                <ProgressBar Height="3" VerticalAlignment="Top" IsIndeterminate="True" Visibility="{Binding IsPlanning, Converter={StaticResource BoolToVisibility}}" />
+                                <TextBlock Margin="0,6,0,0" Style="{StaticResource Body}" Text="{Binding Summary}" />
+                            </Grid>
+                        </Border>
+                        <StackPanel Margin="0,24,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
+                            <ui:Button MinWidth="96" Command="{Binding CloseCommand}" Content="Cancel" IsCancel="True" />
+                            <ui:Button Margin="8,0,0,0" Appearance="Primary" Command="{Binding StartCommand}" Content="Restore" Icon="{ui:SymbolIcon ArrowDownload24}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!--  Progress  -->
+                    <StackPanel Margin="0,16,0,0" Visibility="{Binding IsRunning, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Style="{StaticResource Strong}" Text="{Binding Phase}" />
+                        <ProgressBar Height="4" Margin="0,12,0,0" Maximum="100" Value="{Binding Percent, Mode=OneWay}" />
+                        <TextBlock Margin="0,10,0,0" Style="{StaticResource Secondary}" Text="{Binding Detail}" />
+                        <StackPanel Margin="0,20,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
+                            <ui:Button Command="{Binding PauseOrResumeCommand}" Content="Pause" Icon="{ui:SymbolIcon Pause24}"
+                                       Visibility="{Binding IsPaused, Converter={StaticResource InverseBoolToVisibility}}" />
+                            <ui:Button Command="{Binding PauseOrResumeCommand}" Content="Resume" Icon="{ui:SymbolIcon Play24}"
+                                       Visibility="{Binding IsPaused, Converter={StaticResource BoolToVisibility}}" />
+                            <ui:Button Margin="8,0,0,0" Command="{Binding CloseCommand}" Content="Stop" Icon="{ui:SymbolIcon Dismiss24}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!--  Result  -->
+                    <StackPanel Margin="0,16,0,0" Visibility="{Binding IsDone, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Style="{StaticResource Body}" Text="{Binding ResultMessage}" />
+                        <ScrollViewer MaxHeight="180" Margin="0,6,0,0" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Problems}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Margin="0,4,0,0" Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap" Text="{Binding}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <ui:Button MinWidth="96" Margin="0,20,0,0" HorizontalAlignment="Right" Appearance="Primary" Command="{Binding CloseCommand}" Content="Done" IsDefault="True" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

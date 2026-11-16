@@ -59,3 +59,12 @@ public sealed class ZeroToVisibleConverter : IValueConverter
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => throw new NotSupportedException();
 }
+
+/// <summary>Turns a number into a proportional column width, for stacked bars.</summary>
+public sealed class StarConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        new System.Windows.GridLength(value is double d && d > 0 ? d : 0, System.Windows.GridUnitType.Star);
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => throw new NotSupportedException();
+}

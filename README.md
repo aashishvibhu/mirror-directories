@@ -8,8 +8,9 @@ It tells apart the two reasons a file can disappear from your PC:
 
 Files that vanish any other way are never removed from the backup without asking you.
 
-**DriveSync never deletes anything.** Whatever it removes, on the PC or on the drive, goes to the Recycle Bin.
-Only you erase files for good, by emptying the Recycle Bin.
+**DriveSync never erases anything.** Whatever it removes from the PC goes to the PC's Recycle Bin. Whatever it removes
+from the backup goes to the backup's own trash folder (`.drivesync\trash`) or the drive's Recycle Bin, your choice per
+backup. Only you erase files for good, in File Explorer.
 
 > Version 2 is a rewrite in C# on .NET 10. Version 1 (Java, "Mirror Directories") is available at the `v1.0` tag.
 
@@ -22,9 +23,10 @@ v2 is being built in milestones on the `vbu/v2` branch.
 | 1 | Backup engine and tests | Done |
 | 2 | App basics: setup wizard, dashboard, sync with preview, missing-files decisions | Done |
 | 2.5 | Several backups in one app: overview, add, edit, move to another drive, remove | Done |
-| 3 | Backup browser, restore, version history, free up space, trash | Next |
-| 4 | Tray agent, notifications, schedule, sync on plug-in, Explorer menu | |
-| 5 | Health check screen, settings, installer | |
+| 3 | Backup browser, restore, version history, free up space, storage and trash | Done (`vbu/v3`) |
+| 3.5 | Use a backup on another PC, health checks after every sync, Health screen, BitLocker hint | Done (`vbu/v3`) |
+| 4 | Tray agent, notifications, schedule, sync on plug-in, Explorer menu | Next |
+| 5 | Settings, installer | |
 
 ## How the engine works
 
@@ -48,10 +50,19 @@ its size, modified time, SHA-256 checksum and one of four states.
 - **Missing files** (deleted by hand) are handled by your chosen policy. The default is to ask.
   If many files vanish at once (30% and at least 50), nothing is removed from the backup, because that usually means
   a disconnected folder, a cloud-sync problem or ransomware.
-- **Restore** copies files back from the current backup, an old version, or the Recycle Bin.
-  A different file in the way is renamed, never replaced.
-- **Health check** confirms every backup copy exists with the right size, or, in a full check, the right checksum.
-  It can recopy damaged files that the PC still has.
+- **Restore** copies files back from the current backup, an old version, or the trash. It first works out what it
+  would do (to restore, already there, in the way), checks the PC has room, and reports progress.
+  A different file in the way is renamed, never replaced. A backup copy that fails its checksum is reported.
+- **Removed copies** go to the drive's Recycle Bin or the backup's trash folder. When the bin is full, too small
+  for the item or missing, the trash folder takes it, so a removal never gets stuck. New backups use the trash
+  folder from the start: it has no size limit and is the same on every PC.
+- **Old versions** are listed in the catalog. The app shows what they take and suggests clean-ups (older than a
+  year, keep the newest 5, thin out). Nothing is removed until you confirm, and then it goes to the trash.
+- **Health**: every sync ends with a quick check that each backup copy exists with the right size. A rolling check
+  then checksums the copies that were checked longest ago, for a few minutes, so the whole drive is covered over a
+  few weeks. A full check can be run at any time, and repairs damaged copies that the PC still has.
+- **The drive carries its settings** (`.drivesync\backup.json`), so a backup can be picked up on another PC with the
+  same folders. Files not on that PC can be restored in one go, or left on the drive marked as offloaded.
 
 ### Several backups
 
@@ -84,6 +95,14 @@ A Windows 11-style desktop app (WPF with [WPF-UI](https://github.com/lepoco/wpfu
   missing files, and **Edit backup** (name, folders, removed folders, move to another drive, missing-files rule,
   remove the backup).
 - **Review changes**: every sync shows what's new, changed, moved, back on the PC and missing before anything is copied.
+- **Files**: browse everything on the backup, search it, and filter to offloaded or missing files, also while the
+  drive is unplugged. **Restore** (back where it was, or into a folder you pick), **Free up space**,
+  **Delete everywhere**, and each file's **older versions**.
+- **Storage**: what takes the space on the drive, old versions with suggested clean-ups, and files removed from
+  the backup, which can be restored until you erase them yourself.
+- **Health**: what the checks have found, **Check everything now**, and **Repair**.
+- **Add backup** recognises a drive that already holds a backup and offers to use it on this PC.
+- A drive that isn't protected by BitLocker gets one note in the wizard, with a link to turn it on.
 - **Missing files**: files that left the PC without going through DriveSync, grouped by folder, with a
   Recycle Bin hint. For each group or file: **Deleted on purpose**, **Keep on backup**, or **Decide later**.
   Removing anything from the backup asks for confirmation first.

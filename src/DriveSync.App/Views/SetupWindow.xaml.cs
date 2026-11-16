@@ -11,6 +11,7 @@ public partial class SetupWindow : FluentWindow
     {
         DataContext = viewModel;
         viewModel.PickFolder = PickFolder;
+        viewModel.OpenBitLocker = Services.Shell.OpenBitLocker;
         InitializeComponent();
         Loaded += (_, _) =>
         {

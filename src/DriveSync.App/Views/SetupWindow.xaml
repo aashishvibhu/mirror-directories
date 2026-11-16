@@ -175,6 +175,35 @@
                                 <ui:Button Command="{Binding RefreshDrivesCommand}" Content="Refresh" Icon="{ui:SymbolIcon ArrowClockwise24}" />
                                 <ui:Button Margin="8,0,0,0" Command="{Binding ChooseDriveFolderCommand}" Content="Use a folder instead…" Icon="{ui:SymbolIcon FolderOpen24}" />
                             </StackPanel>
+                            <!--  A backup is already here: offer to carry on with it  -->
+                            <Border Margin="0,16,0,0" Padding="16,12" CornerRadius="8" Background="{DynamicResource SystemFillColorSuccessBackgroundBrush}"
+                                    Visibility="{Binding FoundNote, Converter={StaticResource EmptyToCollapsed}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:SymbolIcon Margin="0,0,12,0" VerticalAlignment="Top" FontSize="20" Foreground="{DynamicResource SystemFillColorSuccessBrush}" Symbol="HardDrive20" />
+                                    <TextBlock Grid.Column="1" Style="{StaticResource Body}" Text="{Binding FoundNote}" />
+                                    <ui:Button Grid.Column="2" Margin="12,0,0,0" VerticalAlignment="Center" Appearance="Primary" Command="{Binding UseFoundBackupCommand}" Content="Use this backup" />
+                                </Grid>
+                            </Border>
+                            <!--  Plain copies on a portable drive: suggest encrypting the drive, once  -->
+                            <Border Margin="0,16,0,0" Padding="16,12" CornerRadius="8" Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}"
+                                    Visibility="{Binding ShowBitLockerHint, Converter={StaticResource BoolToVisibility}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:SymbolIcon Margin="0,0,12,0" VerticalAlignment="Top" FontSize="20" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" Symbol="LockOpen24" />
+                                    <TextBlock Grid.Column="1" Style="{StaticResource Body}"
+                                               Text="This drive isn't encrypted. Your files are stored as plain copies, so anyone who finds the drive can read them. Turning on BitLocker for the drive keeps them private; DriveSync works the same either way." />
+                                    <ui:Button Grid.Column="2" Margin="12,0,0,0" VerticalAlignment="Center" Command="{Binding OpenBitLockerPageCommand}" Content="Open BitLocker…" />
+                                </Grid>
+                            </Border>
                             <Border Margin="0,16,0,0" Padding="16,12" CornerRadius="8" Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
                                     Visibility="{Binding DriveWarning, Converter={StaticResource EmptyToCollapsed}}">
                                 <Grid>
@@ -186,6 +215,56 @@
                                     <TextBlock Grid.Column="1" Style="{StaticResource Body}" Text="{Binding DriveWarning}" />
                                 </Grid>
                             </Border>
+                        </StackPanel>
+
+                        <!--  Instead of steps 3 and 4: carry on with a backup that's already on the drive  -->
+                        <StackPanel Visibility="{Binding IsAdopting, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Style="{StaticResource StepTitle}" Text="Use this backup on this PC" />
+                            <TextBlock Margin="0,8,0,0" Style="{StaticResource Secondary}" Text="{Binding AdoptSummary}" />
+                            <TextBlock Margin="0,16,0,6" Style="{StaticResource Strong}" Text="Name" />
+                            <ui:TextBox Width="340" HorizontalAlignment="Left" AutomationProperties.Name="Backup name" Text="{Binding AdoptName, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Margin="0,20,0,4" Style="{StaticResource Strong}" Text="Where each folder lives on this PC" />
+                            <TextBlock Margin="0,0,0,12" Style="{StaticResource Secondary}"
+                                       Text="Each folder on the backup is matched to a folder here. Nothing is copied again; the backup just carries on from these folders." />
+                            <ItemsControl ItemsSource="{Binding AdoptFolders}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:AdoptFolderViewModel}">
+                                        <Border Margin="0,0,0,8" Padding="16,12" Style="{StaticResource Panel}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ui:SymbolIcon Margin="0,0,14,0" VerticalAlignment="Top" FontSize="24" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" Symbol="Folder24" />
+                                                <StackPanel Grid.Column="1">
+                                                    <TextBlock Style="{StaticResource Strong}" Text="{Binding Name}" />
+                                                    <TextBlock Style="{StaticResource Caption}" Text="{Binding Info}" />
+                                                    <TextBlock Margin="0,6,0,0" Style="{StaticResource Body}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Text="{Binding PathText}" ToolTip="{Binding Path}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="2" Margin="12,0,0,0" VerticalAlignment="Center" Orientation="Horizontal">
+                                                    <ui:Button Command="{Binding ChooseCommand}" Content="Choose…" Icon="{ui:SymbolIcon FolderOpen24}" />
+                                                    <ui:Button Margin="6,0,0,0" Appearance="Transparent" Command="{Binding SkipCommand}" Content="Don't use"
+                                                               Visibility="{Binding IsUsed, Converter={StaticResource BoolToVisibility}}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Margin="0,16,0,10" Style="{StaticResource Strong}" Text="Files on the backup that aren't on this PC" />
+                            <ItemsControl ItemsSource="{Binding AdoptModes}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:AdoptChoiceViewModel}">
+                                        <RadioButton AutomationProperties.Name="{Binding Title}" GroupName="adopt" IsChecked="{Binding IsSelected}" Style="{StaticResource ChoiceCard}">
+                                            <StackPanel>
+                                                <TextBlock Style="{StaticResource Strong}" Text="{Binding Title}" />
+                                                <TextBlock Margin="0,2,0,0" Style="{StaticResource Secondary}" Text="{Binding Description}" />
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
 
                         <!--  Step 3: missing files  -->
@@ -248,7 +327,7 @@
                                     </Grid.ColumnDefinitions>
                                     <ui:SymbolIcon Margin="0,0,12,0" VerticalAlignment="Top" FontSize="20" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" Symbol="ShieldCheckmark24" />
                                     <TextBlock Grid.Column="1" Style="{StaticResource Body}"
-                                               Text="DriveSync only copies your files to the drive. It never deletes anything: whatever it removes later, on the PC or the drive, goes to the Recycle Bin." />
+                                               Text="DriveSync only copies your files to the drive. It never erases anything: whatever it removes later goes to the Recycle Bin on this PC, or to the backup's own trash folder on the drive, and can be brought back." />
                                 </Grid>
                             </Border>
                         </StackPanel>
@@ -270,9 +349,11 @@
                     <ui:ProgressRing Width="20" Height="20" Margin="0,0,12,0" IsIndeterminate="True" Visibility="{Binding IsCreating, Converter={StaticResource BoolToVisibility}}" />
                     <ui:Button MinWidth="96" Command="{Binding BackCommand}" Content="Back" />
                     <ui:Button MinWidth="96" Margin="8,0,0,0" Appearance="Primary" Command="{Binding NextCommand}" Content="Next"
-                               Visibility="{Binding IsLastStep, Converter={StaticResource InverseBoolToVisibility}}" />
+                               Visibility="{Binding ShowNext, Converter={StaticResource BoolToVisibility}}" />
                     <ui:Button Margin="8,0,0,0" Appearance="Primary" Command="{Binding FinishCommand}" Content="Start first backup" Icon="{ui:SymbolIcon ArrowSync24}"
-                               Visibility="{Binding IsLastStep, Converter={StaticResource BoolToVisibility}}" />
+                               Visibility="{Binding ShowFinish, Converter={StaticResource BoolToVisibility}}" />
+                    <ui:Button Margin="8,0,0,0" Appearance="Primary" Command="{Binding FinishAdoptCommand}" Content="Use this backup" Icon="{ui:SymbolIcon Checkmark24}"
+                               Visibility="{Binding IsAdopting, Converter={StaticResource BoolToVisibility}}" />
                 </StackPanel>
             </Grid>
         </Border>

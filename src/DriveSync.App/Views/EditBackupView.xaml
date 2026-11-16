@@ -148,6 +148,29 @@
                     </StackPanel>
                 </Border>
 
+                <!--  Where removed copies go  -->
+                <Border Margin="0,12,0,0" Padding="20,14" Style="{StaticResource Panel}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource Strong}" Text="When a copy is removed from this backup" />
+                        <TextBlock Margin="0,2,0,8" Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap"
+                                   Text="Neither choice erases anything. You free the space yourself, in File Explorer, when you're sure." />
+                        <RadioButton Margin="0,0,0,6" GroupName="edit-removed" IsChecked="{Binding UseTrashFolder}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource Body}" Text="Move it to the backup's trash folder" />
+                                <TextBlock Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap"
+                                           Text="A folder on the backup drive that DriveSync never empties. No size limit, and it's there whichever PC the drive is plugged into." />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton Margin="0,0,0,6" GroupName="edit-removed" IsChecked="{Binding UseTrashFolder, Mode=OneWay, Converter={StaticResource InverseBool}}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource Body}" Text="Send it to the backup drive's Recycle Bin" />
+                                <TextBlock Style="{StaticResource Caption}" TextTrimming="None" TextWrapping="Wrap"
+                                           Text="Shows up in Windows' Recycle Bin on this PC. The bin is small, so when it has no room the trash folder is used instead." />
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+                </Border>
+
                 <!--  Remove the backup  -->
                 <Border Margin="0,12,0,0" Padding="20,12" Style="{StaticResource Panel}">
                     <Grid>
@@ -191,7 +214,7 @@
                         </RadioButton>
                         <RadioButton GroupName="keep-files" IsChecked="{Binding KeepRemovedFiles, Converter={StaticResource InverseBool}}" Style="{StaticResource ChoiceCard}">
                             <StackPanel>
-                                <TextBlock Style="{StaticResource Strong}" Text="Send them to the backup drive's Recycle Bin" />
+                                <TextBlock Style="{StaticResource Strong}" Text="Remove them from the backup" />
                                 <TextBlock Margin="0,4,0,0" Style="{StaticResource Secondary}" Text="{Binding RecycleOptionDetail}" />
                             </StackPanel>
                         </RadioButton>

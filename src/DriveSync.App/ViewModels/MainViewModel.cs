@@ -2,9 +2,26 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DriveSync.App.Services;
+using DriveSync.Core.Engine;
 using DriveSync.Core.Model;
 
 namespace DriveSync.App.ViewModels;
+
+/// <summary>What happens straight after a backup is added to the app.</summary>
+public enum FirstRun
+{
+    /// <summary>A new backup copies everything; one that already has records opens the review first.</summary>
+    Backup,
+
+    /// <summary>A backup from another PC: copy all its files back to this PC, then sync.</summary>
+    RestoreEverything,
+
+    /// <summary>A backup from another PC: leave its files on the drive, marked as offloaded, then sync.</summary>
+    KeepOnDrive,
+
+    /// <summary>Show what a sync would do and let the user decide.</summary>
+    Review,
+}
 
 /// <summary>A non-selectable label in the left menu, such as "Backups".</summary>
 public sealed record NavHeader(string Title);
@@ -88,12 +105,12 @@ public sealed partial class MainViewModel : ObservableObject
     void AddBackup() => AddBackupRequested?.Invoke();
 
     /// <summary>Adds a newly set-up backup, opens it and runs its first backup.</summary>
-    public BackupPageViewModel OnBackupAdded(BackupProfile profile, bool runFirstBackup)
+    public BackupPageViewModel OnBackupAdded(BackupProfile profile, bool runFirstBackup, FirstRun mode = FirstRun.Backup)
     {
         var page = AddPage(profile);
         Select(page);
         if (runFirstBackup)
-            _ = RunFirstBackupAsync(page);
+            _ = RunFirstBackupAsync(page, mode);
         return page;
     }
 
@@ -102,10 +119,37 @@ public sealed partial class MainViewModel : ObservableObject
     /// (its drive already holds files and records) goes through the review screen instead, so nothing recorded
     /// there is touched before the user has seen what would happen.
     /// </summary>
-    public Task RunFirstBackupAsync(BackupPageViewModel page)
+    public async Task RunFirstBackupAsync(BackupPageViewModel page, FirstRun mode = FirstRun.Backup)
     {
-        bool reconnected = page.Profile.LastKnownRoot is { } root && Core.Storage.BackupLocation.HasCatalog(root);
-        return reconnected ? page.SyncNowAsync() : page.Dashboard.SyncWithoutReviewAsync();
+        switch (mode)
+        {
+            case FirstRun.RestoreEverything:
+                // Bring the files back first; the sync that follows then finds them all in place.
+                await page.Restore.RunNowAsync(new RestoreRequest([.. page.Profile.Sources.Select(s => s.Name)]), "Restoring this backup to this PC");
+                await page.Dashboard.SyncWithoutReviewAsync();
+                break;
+            case FirstRun.KeepOnDrive:
+                try
+                {
+                    using var session = await page.OpenSessionAsync();
+                    await session.KeepMissingOnBackupAsync();
+                }
+                catch (Exception e) when (e is Core.DriveSyncException or IOException or Microsoft.Data.Sqlite.SqliteException)
+                {
+                    // Couldn't mark them: fall back to the review, where nothing happens unseen.
+                    await page.SyncNowAsync();
+                    break;
+                }
+                await page.Dashboard.SyncWithoutReviewAsync();
+                break;
+            case FirstRun.Review:
+                await page.SyncNowAsync();
+                break;
+            default:
+                bool reconnected = page.Profile.LastKnownRoot is { } root && Core.Storage.BackupLocation.HasCatalog(root);
+                await (reconnected ? page.SyncNowAsync() : page.Dashboard.SyncWithoutReviewAsync());
+                break;
+        }
     }
 
     /// <summary>Forgets a backup. Its files and history on the drive are left exactly as they are.</summary>
