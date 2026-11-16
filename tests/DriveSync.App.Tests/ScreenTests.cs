@@ -199,6 +199,131 @@ public class HomeTests
     }
 }
 
+public class ReviewAndDriveTests
+{
+    [Fact]
+    public async Task Leaving_the_review_screen_while_it_is_still_scanning_is_safe()
+    {
+        using var env = new AppEnv();
+        for (int i = 0; i < 300; i++)
+            File.WriteAllText(Path.Combine(env.Desktop, $"file{i}.txt"), "x" + i);
+        env.SetUpBackup();
+        var main = new MainViewModel(env.Services);
+        var page = main.Backups[0];
+
+        var scanning = page.SyncNowAsync();
+        page.ShowHome();
+        await scanning; // must not throw
+
+        await page.SyncNowAsync();
+        var review = Assert.IsType<PreviewViewModel>(page.Content);
+        Assert.Null(review.Error);
+        Assert.True(review.HasChanges);
+    }
+
+    [Fact]
+    public async Task Going_to_the_overview_closes_an_open_review_so_sync_all_can_use_the_drive()
+    {
+        using var env = new AppEnv();
+        File.WriteAllText(Path.Combine(env.Desktop, "a.txt"), "a");
+        env.SetUpBackup();
+        var main = new MainViewModel(env.Services);
+        var page = main.Backups[0];
+        await page.SyncNowAsync();
+        Assert.IsType<PreviewViewModel>(page.Content);
+
+        main.ShowOverview();
+        Assert.IsType<DashboardViewModel>(page.Content);
+        await main.SyncAllCommand.ExecuteAsync(null);
+
+        Assert.False(page.Dashboard.LastRunNeedsAttention, page.Dashboard.LastRunMessage);
+        Assert.Equal("1", page.Dashboard.ProtectedCount);
+    }
+
+    [Fact]
+    public async Task The_review_says_when_this_backups_rule_will_remove_missing_files()
+    {
+        using var env = new AppEnv();
+        File.WriteAllText(Path.Combine(env.Desktop, "a.txt"), "a");
+        File.WriteAllText(Path.Combine(env.Desktop, "b.txt"), "b");
+        var profile = env.SetUpBackup();
+        var main = new MainViewModel(env.Services);
+        var page = main.Backups[0];
+        await page.Dashboard.SyncWithoutReviewAsync();
+        profile.MissingFilePolicy = MissingFilePolicy.AlwaysRemove;
+        File.Delete(Path.Combine(env.Desktop, "b.txt"));
+
+        await page.SyncNowAsync();
+
+        var review = Assert.IsType<PreviewViewModel>(page.Content);
+        var missing = Assert.Single(review.Categories, c => c.Title == "Missing from this PC");
+        Assert.Contains("Recycle Bin", missing.Note);
+        Assert.DoesNotContain("These stay on the backup", missing.Note);
+    }
+
+    [Fact]
+    public async Task A_sync_without_review_reports_a_folder_it_couldnt_find()
+    {
+        using var env = new AppEnv();
+        File.WriteAllText(Path.Combine(env.Desktop, "a.txt"), "a");
+        File.WriteAllText(Path.Combine(env.Pictures, "cat.jpg"), "cat");
+        env.SetUpBackup(folders: [env.Desktop, env.Pictures]);
+        var main = new MainViewModel(env.Services);
+        var page = main.Backups[0];
+        await page.Dashboard.SyncWithoutReviewAsync();
+        Directory.Move(env.Pictures, env.Pictures + "-gone");
+
+        await page.Dashboard.SyncWithoutReviewAsync();
+
+        Assert.True(page.Dashboard.LastRunNeedsAttention);
+        Assert.Contains(page.Dashboard.LastRunProblems, p => p.Contains("Pictures"));
+        Assert.Equal("2", page.Dashboard.ProtectedCount); // nothing was treated as deleted
+    }
+
+    [Fact]
+    public async Task A_reconnected_backup_opens_the_review_instead_of_syncing_straight_away()
+    {
+        using var env = new AppEnv();
+        File.WriteAllText(Path.Combine(env.Desktop, "a.txt"), "a");
+        var first = env.SetUpBackup();
+        var main = new MainViewModel(env.Services);
+        await main.Backups[0].Dashboard.SyncWithoutReviewAsync();
+        main.RemoveBackup(main.Backups[0]);
+        File.Delete(Path.Combine(env.Desktop, "a.txt"));
+
+        var again = env.SetUpBackup();
+        Assert.Equal(first.DriveId, again.DriveId);
+        var page = main.OnBackupAdded(again, runFirstBackup: false);
+        await main.RunFirstBackupAsync(page);
+
+        Assert.IsType<PreviewViewModel>(page.Content);
+        Assert.True(File.Exists(Path.Combine(env.Drive, BackupSetup.DefaultFolderName, "Desktop", "a.txt")));
+    }
+
+    [Fact]
+    public async Task Plugging_a_drive_in_or_out_is_noticed_without_opening_the_backup()
+    {
+        using var env = new AppEnv();
+        File.WriteAllText(Path.Combine(env.Desktop, "a.txt"), "a");
+        string drive = env.NewDrive("drive-f");
+        env.SetUpBackup(drive: drive);
+        var main = new MainViewModel(env.Services);
+        var page = main.Backups[0];
+        await page.Dashboard.SyncWithoutReviewAsync();
+        Assert.True(page.Dashboard.IsDriveConnected);
+
+        Directory.Move(drive, drive + "-unplugged");
+        await main.CheckDrivesAsync();
+        Assert.False(page.Dashboard.IsDriveConnected);
+        Assert.False(page.SyncNowCommand.CanExecute(null));
+
+        Directory.Move(drive + "-unplugged", drive);
+        await main.CheckDrivesAsync();
+        Assert.True(page.Dashboard.IsDriveConnected);
+        Assert.True(page.SyncNowCommand.CanExecute(null));
+    }
+}
+
 public class MultipleBackupScreenTests
 {
     [Fact]

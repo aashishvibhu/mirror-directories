@@ -62,6 +62,7 @@ public sealed class BackupLocation
         var candidates = new List<string>();
         if (!string.IsNullOrEmpty(profile.LastKnownRoot))
             candidates.Add(profile.LastKnownRoot);
+        string? lastRelative = RelativeToDrive(profile.LastKnownRoot);
         foreach (var drive in DriveInfo.GetDrives())
         {
             try
@@ -74,6 +75,9 @@ public sealed class BackupLocation
                 continue;
             }
             candidates.Add(Path.Combine(drive.RootDirectory.FullName, profile.BackupFolderName));
+            // A backup kept in a subfolder (E:\Backups\DriveSyncBackup) is looked for at the same place under the new letter.
+            if (lastRelative is not null)
+                candidates.Add(Path.Combine(drive.RootDirectory.FullName, lastRelative));
         }
 
         foreach (string root in candidates)
@@ -82,6 +86,21 @@ public sealed class BackupLocation
                 return new BackupLocation(root);
         }
         return null;
+    }
+
+    /// <summary>True when the folder already holds a backup's records, i.e. it has been synced before.</summary>
+    public static bool HasCatalog(string root) => File.Exists(Path.Combine(root, MetaFolderName, "catalog.db"));
+
+    /// <summary>The part of a path after its drive letter, or null for network paths and paths at the top of a drive.</summary>
+    static string? RelativeToDrive(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+        string? root = Path.GetPathRoot(path);
+        if (string.IsNullOrEmpty(root) || root.StartsWith(@"\\", StringComparison.Ordinal) || path.Length <= root.Length)
+            return null;
+        string relative = path[root.Length..].Trim('\\');
+        return relative.Contains('\\') ? relative : null;
     }
 
     const string Readme = """

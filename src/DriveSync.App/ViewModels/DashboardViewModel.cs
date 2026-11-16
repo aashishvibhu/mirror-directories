@@ -172,6 +172,15 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
             else
                 ShowNoData();
         }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            // The drive is there but its records can't be read: unplugged mid-read, or a damaged catalog.
+            IsDriveConnected = false;
+            Status = BackupStatus.NeedsAttention;
+            StatusIcon = SymbolRegular.Warning24;
+            StatusTitle = "Couldn't read this backup";
+            StatusDetail = $"{e.Message} Check that the backup drive is connected properly, then open this backup again.";
+        }
     }
 
     (BackupSummary Summary, List<ActivityEntry> Activity)? ReadOfflineCopy()
@@ -400,13 +409,20 @@ public sealed partial class DashboardViewModel(BackupPageViewModel page) : Obser
                 + " Check that your folders are where they should be, then review the missing files.";
         }
         if (r.Problems.Count > 0)
-            message += $" {Formatting.Files(r.Problems.Count)} couldn't be copied:";
+            message += $" {Formatting.Files(r.Problems.Count)} had a problem:";
+        else if (r.Warnings.Count > 0)
+            message += " Some places couldn't be looked at, so they weren't backed up this time:";
         LastRunMessage = message;
-        LastRunNeedsAttention = r.Problems.Count > 0 || r.MassDisappearance;
+        LastRunNeedsAttention = r.Problems.Count > 0 || r.MassDisappearance || r.Warnings.Count > 0;
         foreach (var problem in r.Problems.Take(50))
             LastRunProblems.Add($"{problem.Key}: {problem.Message}");
         if (r.Problems.Count > 50)
             LastRunProblems.Add($"…and {r.Problems.Count - 50:N0} more.");
+        // A folder that's missing or unreadable is skipped, not treated as deleted. Say so, or it looks backed up.
+        foreach (string warning in r.Warnings.Take(10))
+            LastRunProblems.Add(warning);
+        if (r.Warnings.Count > 10)
+            LastRunProblems.Add($"…and {r.Warnings.Count - 10:N0} more places.");
     }
 
     /// <summary>Puts the progress card into a realistic state, for the screenshot tool.</summary>

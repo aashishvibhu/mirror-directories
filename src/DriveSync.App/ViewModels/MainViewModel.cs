@@ -65,6 +65,12 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     public void ShowOverview()
     {
+        // A review screen left open keeps its backup's drive to itself; close it so the overview can read and sync it.
+        foreach (var page in Backups)
+        {
+            if (page.Content is PreviewViewModel)
+                page.Content = page.Dashboard;
+        }
         CurrentPage = Overview;
         SelectedNavItem = Overview;
         _ = Overview.RefreshAsync();
@@ -87,8 +93,19 @@ public sealed partial class MainViewModel : ObservableObject
         var page = AddPage(profile);
         Select(page);
         if (runFirstBackup)
-            _ = page.Dashboard.SyncWithoutReviewAsync();
+            _ = RunFirstBackupAsync(page);
         return page;
+    }
+
+    /// <summary>
+    /// Starts a new backup's first sync. A brand-new backup just copies everything. A backup that was reconnected
+    /// (its drive already holds files and records) goes through the review screen instead, so nothing recorded
+    /// there is touched before the user has seen what would happen.
+    /// </summary>
+    public Task RunFirstBackupAsync(BackupPageViewModel page)
+    {
+        bool reconnected = page.Profile.LastKnownRoot is { } root && Core.Storage.BackupLocation.HasCatalog(root);
+        return reconnected ? page.SyncNowAsync() : page.Dashboard.SyncWithoutReviewAsync();
     }
 
     /// <summary>Forgets a backup. Its files and history on the drive are left exactly as they are.</summary>
@@ -124,6 +141,37 @@ public sealed partial class MainViewModel : ObservableObject
             IsSyncingAll = false;
         }
     }
+
+    bool _checkingDrives;
+
+    /// <summary>
+    /// Notices backup drives being plugged in or unplugged, and refreshes the backups whose drive came or went.
+    /// The window calls this when Windows reports a device change and when it becomes the active window.
+    /// </summary>
+    public async Task CheckDrivesAsync()
+    {
+        if (_checkingDrives)
+            return;
+        _checkingDrives = true;
+        try
+        {
+            foreach (var page in Backups.ToList())
+            {
+                if (page.Dashboard.IsSyncing || page.Content is PreviewViewModel)
+                    continue;
+                bool connected = await Task.Run(() => AppServices.IsConnected(page.Profile));
+                if (connected != page.Dashboard.IsDriveConnected && Backups.Contains(page))
+                    await page.Dashboard.RefreshAsync();
+            }
+        }
+        finally
+        {
+            _checkingDrives = false;
+        }
+    }
+
+    /// <summary>True while any backup is copying files, so the window can ask before closing.</summary>
+    public bool IsAnySyncing => Backups.Any(p => p.Dashboard.IsSyncing);
 
     /// <summary>Called when any backup's status, badge or sync state changes, to update the overview.</summary>
     internal void OnBackupStatusChanged() => Overview.UpdateHeadline();

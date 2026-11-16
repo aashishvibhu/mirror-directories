@@ -58,7 +58,8 @@ public sealed partial class DriveSyncSession
                 {
                     var existing = new FileInfo(target);
                     var backup = new FileInfo(from);
-                    if (existing.Length == backup.Length && existing.LastWriteTimeUtc == backup.LastWriteTimeUtc)
+                    // Backup drives formatted as exFAT or FAT32 round times (to 10 ms or 2 s), so allow for that.
+                    if (existing.Length == backup.Length && (existing.LastWriteTimeUtc - backup.LastWriteTimeUtc).Duration() <= TimeSpan.FromSeconds(2))
                     {
                         result.AlreadyThere++;
                         if (toOriginalPlace)
@@ -73,7 +74,22 @@ public sealed partial class DriveSyncSession
                 string temp = target + FsUtil.TempSuffix;
                 try
                 {
-                    await FileHasher.CopyWithHashAsync(from, temp, null, ct);
+                    string hash = await FileHasher.CopyWithHashAsync(from, temp, null, ct);
+                    var known = request.Source == RestoreSource.CurrentBackup ? Catalog.Get(key) : null;
+                    if (known is { Hash.Length: > 0 })
+                    {
+                        if (!known.Hash.Equals(hash, StringComparison.OrdinalIgnoreCase))
+                        {
+                            result.Problems.Add(new Problem(key,
+                                "The backup copy no longer matches its checksum, so it may be damaged. It was restored anyway; check the file, and run a full health check."));
+                        }
+                        else if (toOriginalPlace)
+                        {
+                            // Give the file the exact time on record, so the next sync sees it as unchanged
+                            // even when the backup drive rounds times.
+                            File.SetLastWriteTimeUtc(temp, new DateTime(known.ModifiedUtcTicks, DateTimeKind.Utc));
+                        }
+                    }
                     File.Move(temp, target);
                 }
                 catch

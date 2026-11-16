@@ -14,6 +14,7 @@ namespace DriveSync.App;
 public partial class App : Application
 {
     AppServices _services = null!;
+    Mutex? _singleInstance;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -29,7 +30,32 @@ public partial class App : Application
             return;
         }
 
-        _services.Load();
+        // Two copies of the app would overwrite each other's list of backups.
+        _singleInstance = new Mutex(initiallyOwned: true, "DriveSync.App." + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(_services.Store.Folder).ToUpperInvariant())))[..16], out bool first);
+        if (!first)
+        {
+            System.Windows.MessageBox.Show("DriveSync is already running. Look for it on the taskbar.", "DriveSync",
+                System.Windows.MessageBoxButton.OK, MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
+
+        try
+        {
+            _services.Load();
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            // Starting with an empty list would overwrite the file on the next change, so stop instead.
+            System.Windows.MessageBox.Show(
+                $"DriveSync couldn't read its list of backups:\n{_services.Store.FilePath}\n\n{ex.Message}\n\n"
+                + "Your backup drives aren't affected. Fix or rename that file, then start DriveSync again; "
+                + "Add backup reconnects a drive that already holds a backup.",
+                "DriveSync", System.Windows.MessageBoxButton.OK, MessageBoxImage.Warning);
+            Shutdown(1);
+            return;
+        }
         if (_services.Backups.Count == 0)
             ShowFirstSetup();
         else
@@ -71,7 +97,7 @@ public partial class App : Application
         if (page is not null)
         {
             viewModel.Select(page);
-            _ = page.Dashboard.SyncWithoutReviewAsync();
+            _ = viewModel.RunFirstBackupAsync(page);
         }
         else
         {

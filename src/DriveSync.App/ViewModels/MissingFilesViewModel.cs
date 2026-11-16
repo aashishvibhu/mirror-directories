@@ -5,6 +5,7 @@ using DriveSync.App.Services;
 using DriveSync.Core;
 using DriveSync.Core.Engine;
 using DriveSync.Core.Model;
+using Microsoft.Data.Sqlite;
 
 namespace DriveSync.App.ViewModels;
 
@@ -93,9 +94,9 @@ public sealed partial class MissingFilesViewModel(BackupPageViewModel page) : Ob
             UpdateTotals();
             ApplyFilter();
         }
-        catch (DriveSyncException e)
+        catch (Exception e) when (e is DriveSyncException or IOException or UnauthorizedAccessException or SqliteException)
         {
-            LoadError = e.Message;
+            LoadError = e is DriveSyncException ? e.Message : $"Couldn't read the backup: {e.Message}";
             _all.Clear();
             Groups.Clear();
         }
@@ -220,10 +221,10 @@ public sealed partial class MissingFilesViewModel(BackupPageViewModel page) : Ob
             foreach (var problem in result.Problems.Take(20))
                 ResultProblems.Add($"{problem.Key}: {problem.Message}");
         }
-        catch (DriveSyncException e)
+        catch (Exception e) when (e is DriveSyncException or IOException or UnauthorizedAccessException or SqliteException)
         {
             ResultIsWarning = true;
-            ResultMessage = e.Message;
+            ResultMessage = e is DriveSyncException ? e.Message : $"Nothing was changed: {e.Message}";
         }
         finally
         {

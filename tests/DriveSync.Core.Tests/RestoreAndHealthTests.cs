@@ -26,6 +26,51 @@ public class RestoreAndHealthTests
     }
 
     [Fact]
+    public async Task A_restored_file_gets_its_recorded_time_even_when_the_backup_drive_rounds_times()
+    {
+        using var env = new TestEnv();
+        env.Write(@"Desktop\thesis.docx", "final final v3");
+        await env.SyncAsync();
+        using (var session = env.Open())
+            await session.OffloadAsync([@"Desktop\thesis.docx"]);
+        long recorded = env.Record(@"Desktop\thesis.docx")!.ModifiedUtcTicks;
+        // An exFAT or FAT32 backup drive doesn't keep the exact time.
+        File.SetLastWriteTimeUtc(env.BackupPath(@"Desktop\thesis.docx"), new DateTime(recorded, DateTimeKind.Utc).AddSeconds(1));
+
+        using (var session = env.Open())
+            Assert.Empty((await session.RestoreAsync(new RestoreRequest([@"Desktop\thesis.docx"]))).Problems);
+
+        Assert.Equal(recorded, File.GetLastWriteTimeUtc(env.PcPath(@"Desktop\thesis.docx")).Ticks);
+        var plan = await env.Open().UsingAsync(s => s.PlanSyncAsync());
+        Assert.Empty(plan.ChangedFiles);
+
+        // Restoring again finds the same file already there, instead of keeping a renamed second copy.
+        using (var session = env.Open())
+        {
+            var again = await session.RestoreAsync(new RestoreRequest([@"Desktop\thesis.docx"]));
+            Assert.Equal(1, again.AlreadyThere);
+            Assert.Equal(0, again.KeptBoth);
+        }
+    }
+
+    [Fact]
+    public async Task Restoring_a_damaged_backup_copy_says_so()
+    {
+        using var env = new TestEnv();
+        env.Write(@"Desktop\photo.jpg", "pixels pixels");
+        await env.SyncAsync();
+        using (var session = env.Open())
+            await session.OffloadAsync([@"Desktop\photo.jpg"]);
+        File.WriteAllText(env.BackupPath(@"Desktop\photo.jpg"), "pixels pix#ls");
+
+        using var check = env.Open();
+        var result = await check.RestoreAsync(new RestoreRequest([@"Desktop\photo.jpg"]));
+
+        Assert.Equal(1, result.Restored);
+        Assert.Contains("checksum", Assert.Single(result.Problems).Message);
+    }
+
+    [Fact]
     public async Task Restore_never_replaces_a_different_file_in_the_way()
     {
         using var env = new TestEnv();
